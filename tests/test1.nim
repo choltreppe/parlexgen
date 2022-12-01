@@ -1,11 +1,10 @@
 import unittest
 import parlexgen
 
-import std/[strutils, strformat, sequtils]
+import std/[strutils, strformat, sequtils, options, macros]
 
 when true:
   test "test1":
-
     type
       Op = enum opMul="*", opAdd="+"
       ExpKind = enum ekNum, ekOp
@@ -64,16 +63,24 @@ when true:
         (add, MUL, mul): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
         add: s1
 
+        !error: echo "expected mul expression"
+
       add[Exp]:
         (val, ADD, add): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
         val: s1
+
+        !error:
+          echo "expected add expression"
+          echo token
 
       val[Exp]:
         (LPAR, mul, RPAR): s2
         NUM: Exp(kind: ekNum, val: s1.val)
 
-    let tokens = lex("0=(1+1)")
-    echo tokens
+      !error: return
+
+    #let tokens = lex("0=(1+1)")
+    #echo tokens
     #echo parse(tokens)
     echo parse(@[
       Token(kind: NUM, val: 0),
@@ -109,48 +116,5 @@ when false:
         b: "b"
 
     echo testParser(@[ta, tb, ta, ta, tb])
-
-    check true
-
-when false:
-  test "test3":
-    
-    type
-      TestTerminalKind = enum a, b
-      TestTerminal = object
-        kind: TestTerminalKind
-
-    makeParser testParser[TestTerminal]:
-      S[int]:
-        A: 0
-        B: 0
-
-      A[int]:
-        (a, b): 0
-
-      B[int]:
-        a: 0
-
-when false:
-  test "test4":
-
-    type
-      TestTerminalKind = enum LPAR, RPAR, ADD, NUM
-      TestTerminal = object
-        kind: TestTerminalKind
-
-    func t(kind: TestTerminalKind): TestTerminal =
-      TestTerminal(kind: kind)
-
-    makeParser testParser[TestTerminal]:
-      add[int]:
-        (val, ADD, add): 0
-        val: 0
-
-      val[int]:
-        (LPAR, add, RPAR): 0
-        NUM: 0
-
-    echo testParser(@[t NUM, t ADD, t NUM])
 
     check true

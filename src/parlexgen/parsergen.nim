@@ -21,6 +21,8 @@ type
 
   GotoTable[L, N: static int] = array[L, array[N, int]]
 
+  ParsingError* = ref object of CatchableError
+
 func `$`*(symbol: Symbol): string =
   case symbol.kind
   of symTerminal: $symbol.token.kind
@@ -64,20 +66,6 @@ func `[]`(rules: seq[MRules], id: MRuleId): MRuleRhs =
 
 func `<`(a,b: MItem): bool = a.ruleIdDot < b.ruleIdDot
 
-func `$`[T](o: Option[T]): string =
-  if o.isNone: ""
-  else: $get(o)
-
-func `$`(ruleId: MRuleId): string =
-  $ruleId.rule & "," & $ruleId.rhs
-
-
-proc addNewOrAppend[K,V](table: var Table[K, seq[V]], key: K, val: V) =
-  if key in table:
-    table[key] &= val
-  else:
-    table[key] = @[val]
-
 
 macro makeParser*(head,body: untyped): untyped =
 
@@ -97,7 +85,19 @@ macro makeParser*(head,body: untyped): untyped =
 
   # --- collect nonterminals: ---
 
-  body.expectKind(nnkStmtList)
+  body.expectKindError(nnkStmtList, "expected list of rules")
+
+  template tryParseErrorHandler(node, curHandler: NimNode, body: untyped) =
+    if node.kind == nnkPrefix:
+      node[0].expectKind(nnkIdent)
+      node[1].expectKind(nnkIdent)
+      node[2].expectKind(nnkStmtList)
+      assertError(node[0].strVal == "!", "unexpected '" & node[0].strVal & "'", node[0])
+      assertError(node[1].strVal.eqIdent("error"), "unexpected '" & node[1].strVal & "' did you mean 'error' ?", node[1])
+      assertError(curHandler.kind == nnkEmpty, "double definition of error handler", node)
+      let it {.inject.} = node[2]
+      body
+      continue
 
   # there is already 1 terminal with no type for S' start symbol
   var
@@ -106,10 +106,18 @@ macro makeParser*(head,body: untyped): untyped =
     resTypes:        seq[NimNode]
     resTypeNtMap:    seq[seq[int]]  # resType id -> seq[nt ids that have that type]
 
-  for rules in body:
-    rules.expectKind(nnkCall)
-    rules[0].expectKind(nnkBracketExpr)
-    rules[0][0].expectKind(nnkIdent)
+    globalErrorHandler = newEmptyNode()
+    globalErrorHandlerPos = -1  # for skipping when parsing rules
+
+  for (i, rules) in body.pairs:
+
+    tryParseErrorHandler(rules, globalErrorHandler):
+      globalErrorHandler = it
+      globalErrorHandlerPos = i
+
+    rules.expectKindError(nnkCall, "expected collection of rules for a nonterminal")
+    rules[0].expectKindError(nnkBracketExpr, "expected nonterminal with type")
+    rules[0][0].expectKindError(nnkIdent, "expected nonterminal name")
     let name    = rules[0][0].strVal.nimIdentNormalize
     let resType = rules[0][1]
     let resTypeId =
@@ -118,7 +126,7 @@ macro makeParser*(head,body: untyped): untyped =
         resTypes &= resType
         resTypeNtMap &= @[]
         high(resTypes)
-    assert name notin nonterminalInfo
+    assertError(name notin nonterminalInfo, "double definition of nonterminal", rules[0][0])
     nonterminals &= (name, resTypeId)
     nonterminalInfo[name] = (high(nonterminals), resTypeId)
     resTypeNtMap[resTypeId] &= high(nonterminals)
@@ -127,25 +135,34 @@ macro makeParser*(head,body: untyped): untyped =
 
   var
     ruleSets: seq[MRules]  # lhs (nont. id) -> seq[rhs] (options)
+    errorHandlers = newSeqWith(len(nonterminals), newEmptyNode())  # nonterminal/lhs -> error handler
     reduceNimNode: seq[NimNode]  # only for errors
 
   # start rule: S' -> S
   ruleSets &= @[MRuleRhs(pattern: @[newNonTerminal(1)], reduceId: -1)]
 
   var curReduceId = 0
-  for (id, rules) in body.pairs:
+  for (i, rules) in body.pairs:
+    if i == globalErrorHandlerPos: continue
     rules[1].expectKind(nnkStmtList)
     
     ruleSets &= @[]
     for rule in rules[1]:
-      rule.expectKind(nnkCall)
+
+      tryParseErrorHandler(rule, errorHandlers[high(ruleSets)]):
+        errorHandlers[high(ruleSets)] = it
+
+      rule.expectKindError(nnkCall, "expected a rule rhs with AST geration code")
       reduceNimNode &= rule
 
       ruleSets[^1] &= MRuleRhs(reduceId: curReduceId)
       inc curReduceId
 
-      proc parseSymbol(i: int, sym: NimNode) =
-        sym.expectKind(nnkIdent)
+      proc parseSymbol(i: int, sym: NimNode, single = false) =
+        sym.expectKindError(nnkIdent,
+          if single: "expected a nonterminal or terminal (token kind) or list of those in ()"
+          else: "expected a nonterminal or terminal (token kind)"
+        )
 
         let symName = sym.strVal.nimIdentNormalize
         ruleSets[^1][^1].pattern.add:
@@ -158,63 +175,14 @@ macro makeParser*(head,body: untyped): untyped =
       of nnkTupleConstr:
         for (i, sym) in rule[0].pairs: parseSymbol(i, sym)
       of nnkPar:
-        parseSymbol(0, rule[0][0])
+        parseSymbol(0, rule[0][0], single = true)
       else:
-        parseSymbol(0, rule[0])
+        parseSymbol(0, rule[0], single = true)
 
   # assert all nts just have one ruleset
   assert len(nonterminals) == len(ruleSets)
 
-  func `$`(s: MSymbol): string =
-    case s.kind
-    of mSymTerminal: s.name
-    of mSymNonTerminal: nonterminals[s.id].name
-
-  func `$`(ruleIdDot: MRuleIdDotted): string =
-    nonterminals[ruleIdDot.id.rule].name &
-    " -> " &
-    collect(
-      for (i, sym) in ruleSets[ruleIdDot.id].pattern.pairs:
-        if i == ruleIdDot.dotPos: "." & $sym
-        else: $sym
-    ).join(" ") & (
-      if ruleIdDot.dotPos == len(ruleSets[ruleIdDot.id].pattern):
-        "."
-      else: ""
-    )
-
-  func `$`(x: MItem): string =
-    ($x.ruleIdDot).alignLeft(20) & $x.lookahead
-
-  func `$`(x: seq[MItem]): string =
-    x.mapIt($it).join("\n")
-
   # --- generate parsing table: ---
-
-  #[func findFirstSet(symbols: seq[Symbol]): HashSet[Terminal] =
-    var visited: HashSet[int]
-    proc findRec(symbols: seq[Symbol]): tuple[first: HashSet[Terminal], epsilon: bool] =
-      result.epsilon = false
-      for sym in symbols:
-        case sym.kind
-        of mSymTerminal:
-          result.first.incl sym.name
-          result.epsilon = false
-          break
-        of mSymNonTerminal:
-          if sym.id in visited: break
-          else:
-            visited.incl sym.id
-            for rhs in ruleSets[sym.id]:
-              let (first, epsilon) = findRec(rhs.pattern)
-              result.first.incl first
-              result.epsilon =  result.epsilon or epsilon
-            if not result.epsilon:
-              break
-      result.epsilon = true
-
-    let (first, _) = findRec(symbols)
-    first]#
 
   func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
     var visited: HashSet[int]
@@ -233,9 +201,6 @@ macro makeParser*(head,body: untyped): untyped =
   let firstSets: seq[HashSet[MTerminal]] = collect:
     for (i, info) in nonterminals.pairs:
       findFirstSet(newNonTerminal(i))
-
-  for s in firstSets:
-    debugEcho s
 
   # - build automaton: -
 
@@ -258,7 +223,6 @@ macro makeParser*(head,body: untyped): untyped =
 
       proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead) =
         if ruleIdDot in lookaheadTable:
-          debugEcho "yo"
           lookaheadTable[ruleIdDot].incl lookahead
 
         else:
@@ -332,19 +296,6 @@ macro makeParser*(head,body: untyped): untyped =
       currentState
 
   discard buildStateMashine(@[MItem(ruleIdDot: ((0, 0), 0), lookahead: toHashSet([""]))])
-
-  # debug:
-  
-  func `$`(os: Option[MSymbol]): string =
-    if os.isNone: ""
-    else: $os.get
-
-  debugEcho "    " & toSeq(0..high(stateItems)).mapIt("|" & ($it).alignLeft(8)).join
-  for (i, row) in adjacencyMat.pairs:
-    debugEcho ($i).alignLeft(4) & row.mapIt("|" & ($it).alignLeft(8)).join
-
-  debugEcho ""
-  for (i, s) in stateItems.pairs: debugEcho $i, " ", s
 
   # - build parsing table: -
 
@@ -426,9 +377,7 @@ macro makeParser*(head,body: untyped): untyped =
           assert gotoTable[fromState][symbol.id] < 0
           gotoTable[fromState][symbol.id] = toState
 
-  debugEcho actionTable
-
-  # --- build parser: ---
+  # --- build code: ---
 
   result = block:
     let
@@ -442,6 +391,8 @@ macro makeParser*(head,body: untyped): untyped =
       curToken     = genSym(nskLet, "token")
       curTokenKind = genSym(nskLet, "tokenKind")
       curReduceId  = genSym(nskLet, "reduceId")
+      failedNtId   = genSym(nskForVar, "nt")
+      tokenForError = ident"token"
       
       kindField = ident"kind"  # just too workaround a quote bug
 
@@ -564,6 +515,26 @@ macro makeParser*(head,body: untyped): untyped =
 
       caseStmt
 
+    # saves nts that might be reduced in the future for error handling 
+    let statePotentialNtLookupDef = block:
+      var lookup = nnkBracket.newTree()
+      for items in stateItems:
+        let nts = items.mapIt(it.ruleIdDot.id.rule).deduplicate
+        lookup.add:
+          genAst(nts): nts
+      lookup
+
+    let errorHandlingCaseStmt = block:
+      var caseStmt = nnkCaseStmt.newTree(failedNtId)
+      for (i, body) in errorHandlers.pairs:
+        if body.kind == nnkStmtList:
+          caseStmt.add nnkOfBranch.newTree(newLit(i), body)
+      caseStmt.add nnkElse.newTree(
+        quote do: discard
+      )
+      caseStmt
+
+
     let
       resTypeField = ident(nonterminalVariantPrefix & $0)
       stateNum = newLit(len(stateItems))
@@ -580,8 +551,7 @@ macro makeParser*(head,body: untyped): untyped =
           `goto`  : GotoTable[`stateNum`, `ntNum`]  = `gotoTableDef`
           `action`: ActionTable[`stateNum`, `tokenKindType`] = `actionTableDef`
 
-        debugEcho `goto`
-        for row in `action`: debugEcho row
+          potentialNts: array[`stateNum`, seq[int]] = `statePotentialNtLookupDef`
 
         var
           `stack`: seq[tuple[s: `symbolType`, state: int]]
@@ -589,7 +559,6 @@ macro makeParser*(head,body: untyped): untyped =
           pos = 0
 
         while true:
-          debugEcho `stack`
 
           let actionRow = `action`[`curState`]
           let (token, action) =
@@ -616,6 +585,8 @@ macro makeParser*(head,body: untyped): untyped =
             return `stack`[0].s.nt.`resTypeField`
 
           of actionNone:
-            assert false
-
-  debugEcho result.repr
+            let `tokenForError` = token
+            for `failedNtId` in potentialNts[`curState`]:
+              `errorHandlingCaseStmt`
+              `globalErrorHandler`
+              raise ParsingError(msg: "parsing failed")
