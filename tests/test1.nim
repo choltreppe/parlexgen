@@ -42,14 +42,16 @@ when true:
       stmnts.mapIt($it).join(";")
 
     makeLexer lex[Token]:
-      r"[0-9]+": Token(kind: NUM, val: parseInt(it.match))
+      r"[0-9]+": Token(kind: NUM, val: parseInt(match))
       r"\+":     Token(kind: ADD)
       r"\*":     Token(kind: MUL)
       r"\(":     Token(kind: LPAR)
       r"\)":     Token(kind: RPAR)
       r";":      Token(kind: SEMI)
       r"=":      Token(kind: ASSIGN)
-      skip r" +"
+      !skip: r" +"
+      !error:
+        echo line, " ", col
 
     makeParser parse[Token]:
       stmnts[seq[Stmnt]]:
@@ -79,20 +81,7 @@ when true:
 
       !error: return
 
-    #let tokens = lex("0=(1+1)")
-    #echo tokens
-    #echo parse(tokens)
-    echo parse(@[
-      Token(kind: NUM, val: 0),
-      Token(kind: ASSIGN),
-      Token(kind: LPAR),
-      Token(kind: NUM, val: 1),
-      Token(kind: MUL),
-      Token(kind: NUM, val: 2),
-      Token(kind: ADD),
-      Token(kind: NUM, val: 3),
-      Token(kind: RPAR)
-    ])
+    echo parse(lex("0=(1+2) * 3"))
 
     check true
 

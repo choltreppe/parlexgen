@@ -24,6 +24,7 @@ func getProcMeta*(head: NimNode): tuple[ident, typ: NimNode] =
 
   else:
     error "expected name of proc and type of tokens", head
+    
 
 proc addNewOrAppend*[K,V](table: var Table[K, seq[V]], key: K, val: V) =
   if key in table:
