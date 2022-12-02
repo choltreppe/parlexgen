@@ -6,7 +6,7 @@ import ./utils
 type LexingError* = ref object of CatchableError
 
 macro makeLexer*(head,body: untyped): untyped =
-  body.expectKind(nnkStmtList)
+  body.expectKindError(nnkStmtList, "expected list of rules")
   
   let (procIdent, tokenType) = getProcMeta(head)
 
@@ -55,7 +55,7 @@ macro makeLexer*(head,body: untyped): untyped =
       if rule[1].strVal.eqIdent("skip"):
         assertError(not skipPatternDefined, "double definition of skip pattern", rule)
         assertError(len(rule[2]) == 1, "expected just a string literal", rule[2])
-        # TODO: verify rule[0] is string (not neccesary literal)
+        # TODO: verify rule[2][0] is string (not neccesary literal)
         addMatchingAttempt rule[2][0], newEmptyNode()
 
       elif rule[1].strVal.eqIdent("error"):
