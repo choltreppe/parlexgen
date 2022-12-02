@@ -8,6 +8,10 @@ proc expectKindError*(node: NimNode, kind: NimNodeKind, msg: string) =
   if node.kind != kind:
     error msg, node
 
+proc expectKindError*(node: NimNode, kinds: set[NimNodeKind], msg: string) =
+  if node.kind notin kinds:
+    error msg, node
+
 func getProcMeta*(head: NimNode): tuple[ident, typ: NimNode] =
   case head.kind
   of nnkInfix:
@@ -24,7 +28,7 @@ func getProcMeta*(head: NimNode): tuple[ident, typ: NimNode] =
 
   else:
     error "expected name of proc and type of tokens", head
-    
+
 
 proc addNewOrAppend*[K,V](table: var Table[K, seq[V]], key: K, val: V) =
   if key in table:

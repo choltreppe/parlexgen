@@ -586,7 +586,9 @@ macro makeParser*(head,body: untyped): untyped =
 
           of actionNone:
             let `tokenForError` = token
+            {.warning[UnreachableCode]:off.}
             for `failedNtId` in potentialNts[`curState`]:
               `errorHandlingCaseStmt`
               `globalErrorHandler`
               raise ParsingError(msg: "parsing failed")
+            {.warning[UnreachableCode]:on.}

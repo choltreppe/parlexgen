@@ -7,81 +7,103 @@ when true:
   test "test1":
     type
       Op = enum opMul="*", opAdd="+"
-      ExpKind = enum ekNum, ekOp
+      ExpKind = enum ekNum, ekVar, ekOp
       Exp = ref object
         case kind: ExpKind
         of ekNum: val: int
+        of ekVar: name: string
         of ekOp:
           op: Op
           left, right: Exp
 
-      StmntKind = enum stmntAssign
+      StmntKind = enum stmntAssign, stmntOutput
       Stmnt = object
         case kind: StmntKind
         of stmntAssign:
-          res: int
+          res: string
           exp: Exp
+        of stmntOutput:
+          outVar: string
 
-      TokenKind = enum NUM, ADD, MUL, LPAR, RPAR, SEMI, ASSIGN
+      TokenKind = enum NUM, IDENT, OUT="out", PLUS="+", ASTERIX="*", LPAR="(", RPAR=")", SEMI=";", ASSIGN="="
       Token = object
         case kind: TokenKind
         of NUM: val: int
+        of IDENT: name: string
         else: discard
+        line, col: int
 
     func `$`(exp: Exp): string =
       case exp.kind
       of ekNum: $exp.val
+      of ekVar: exp.name
       of ekOp: "(" & $exp.left & " " & $exp.op & " " & $exp.right & ")"
 
     func `$`(stmnt: Stmnt): string =
       case stmnt.kind
       of stmntAssign:
-        $stmnt.res & " = " & $stmnt.exp
+        stmnt.res & " = " & $stmnt.exp
+      of stmntOutput:
+        "out " & stmnt.outVar
 
     func `$`(stmnts: seq[Stmnt]): string =
-      stmnts.mapIt($it).join(";")
+      stmnts.mapIt($it).join("; ")
+
 
     makeLexer lex[Token]:
-      r"[0-9]+": Token(kind: NUM, val: parseInt(match))
-      r"\+":     Token(kind: ADD)
-      r"\*":     Token(kind: MUL)
-      r"\(":     Token(kind: LPAR)
-      r"\)":     Token(kind: RPAR)
-      r";":      Token(kind: SEMI)
-      r"=":      Token(kind: ASSIGN)
-      !skip: r" +"
+
+      "out": Token(kind: OUT, line: line, col: col)
+
+      r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: line, col: col)
+
+      r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: line, col: col)
+
+      for t in PLUS .. ASSIGN:
+        (r"\" & $t): Token(kind: t, line: line, col: col)
+
+      !skip: r"[ \n\r]+"
       !error:
-        echo line, " ", col
+        echo line, " ", col, ": lex error"
+
 
     makeParser parse[Token]:
       stmnts[seq[Stmnt]]:
         (stmnts, SEMI, stmnt): s1 & s3
         stmnt: @[s1]
 
+        !error: echo "stmnts"
+
       stmnt[Stmnt]:
-        (NUM, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.val, exp: s3)
+        (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.name, exp: s3)
+        (OUT, IDENT): Stmnt(kind: stmntOutput, outVar: s2.name)
+
+        !error: echo "stmnt"
 
       mul[Exp]:
-        (add, MUL, mul): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
+        (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
         add: s1
 
         !error: echo "expected mul expression"
 
       add[Exp]:
-        (val, ADD, add): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
+        (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
         val: s1
 
-        !error:
-          echo "expected add expression"
-          echo token
+        !error: echo "expected add expression"
 
       val[Exp]:
         (LPAR, mul, RPAR): s2
         NUM: Exp(kind: ekNum, val: s1.val)
+        IDENT: Exp(kind: ekVar, name: s1.name)
 
-      !error: return
+      !error: echo "parse error: ", token
 
-    echo parse(lex("0=(1+2) * 3"))
+    echo parse(lex(dedent"""
+      a = (1+2) * 3;
+      out a;
+      b = a * a;
+      out b
+    """))
 
     check true
 

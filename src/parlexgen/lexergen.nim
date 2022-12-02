@@ -17,16 +17,24 @@ macro makeLexer*(head,body: untyped): untyped =
     col    = ident"col"
     match  = ident"match"
     tokens = ident"result"
-    posForError = ident"pos"
+    regexs      = genSym(nskLet, "regexs")
+    loopRegexs  = genSym(nskLet, "loopRegexs")
+    localRegexs = genSym(nskVar, "localRegexs")
+    loopRegexCount = genSym(nskVar, "i")
+    loopGotMatch   = genSym(nskVar, "gotMatch")
 
   var
     matchingAttempts = newStmtList()
+    regexsDef = nnkBracket.newTree()
+    loopRegexsDef = nnkBracket.newTree()
     skipPatternDefined = false
     errorHandler = newEmptyNode()
 
   proc addMatchingAttempt(pattern, body: NimNode) =
+    let regexId = len(regexsDef)
+    regexsDef.add quote do: re(`pattern`)
     matchingAttempts.add quote do:
-      let l = `code`.matchLen(re(`pattern`), `pos`)
+      let l = `code`.matchLen(`regexs`[`regexId`], `pos`)
       if l >= 0:
         let `match` = `code`[`pos` ..< `pos` + l]
         `body`
@@ -35,6 +43,8 @@ macro makeLexer*(head,body: untyped): untyped =
         continue
 
   for rule in body:
+
+    # -- special handlers: ---
 
     if rule.kind == nnkPrefix:
       rule[0].expectKind(nnkIdent)
@@ -59,7 +69,57 @@ macro makeLexer*(head,body: untyped): untyped =
       skipPatternDefined = true
       continue
 
-    rule.expectKind(nnkCall)
+    # -- loops of rules: --
+
+    if rule.kind == nnkForStmt:
+      let
+        elem = rule[0]
+        vals = rule[1]
+        body = rule[2]
+
+      body.expectKind(nnkStmtList)
+
+      let regexId = len(loopRegexsDef)
+      var collectRegexs = newStmtList()
+      var matchingLoopBody = newStmtList()
+      for rule in body:
+        rule.expectKindError({nnkCall, nnkCommand}, "expected pattern with token generation code")
+        let pattern = rule[0]
+        let action  = rule[1]
+
+        collectRegexs.add quote do:
+          `localRegexs` &= re(`pattern`)
+
+        matchingLoopBody.add quote do:
+          let l = `code`.matchLen(`loopRegexs`[`regexId`][`loopRegexCount`], `pos`)
+          if l >= 0:
+            let `match` = `code`[`pos` ..< `pos` + l]
+            `tokens` &= `action`
+            `pos` += l
+            `col` += l - `match`.count({'\n', '\r'})
+            `loopGotMatch` = true
+            break
+          inc `loopRegexCount`
+
+      loopRegexsDef.add quote do:
+        block:
+          var `localRegexs`: seq[Regex]
+          for `elem` in `vals`:
+            `collectRegexs`
+          `localRegexs`
+
+      matchingAttempts.add quote do:
+        var `loopRegexCount` = 0
+        var `loopGotMatch` = false
+        for `elem` in `vals`:
+          `matchingLoopBody`
+        if `loopGotMatch`: continue
+
+      continue
+
+    # -- normal rules: --
+
+    rule.expectKindError({nnkCall, nnkCommand}, "expected pattern with token generation code")
     # TODO: verify rule[0] is string (not neccesary literal)
     let pattern = rule[0]
     let action  = rule[1]
@@ -68,6 +128,8 @@ macro makeLexer*(head,body: untyped): untyped =
 
   result = quote do:
     proc `procIdent`(`code`: string): seq[`tokenType`] =
+      let `regexs`     {.global.} = `regexsDef`
+      let `loopRegexs` {.global.} = `loopRegexsDef`
       var `pos` = 0
       var `line`, `col` = 1
       while `pos` < len(`code`):
@@ -75,7 +137,7 @@ macro makeLexer*(head,body: untyped): untyped =
           inc `line`
           `col` = 0
         `matchingAttempts`
+        {.warning[UnreachableCode]:off.}
         `errorHandler`
         raise LexingError(msg: "lexing error at (" & $`line` & ", " & $`col` & ")")
-
-  debugEcho result.repr
+        {.warning[UnreachableCode]:on.}
