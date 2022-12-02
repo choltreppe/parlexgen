@@ -2,7 +2,7 @@ This module provides a macro for generating (LALR(1)) parsers.<br>
 It also provides one for generating lexers but the generated lexers arent realy optimal, so if you realy need best performance better use something else for the lexer.
 The syntax for the grammar definition is inspired by https://github.com/loloicci/nimly
 
-# makeParser
+## makeParser
 here is a small example of the `makeParser` macro (details will be explained beneeth)
 ```nim
 makeParser parse[Token]:
@@ -38,7 +38,7 @@ makeParser parse[Token]:
   !error: echo "parse error: ", token
 ```
 
-## signature
+### signature
 The signature defines the name of the generated proc, its input token type and if its exported.
 
 The following
@@ -61,11 +61,11 @@ proc name*(tokens: seq[T]): A =
 
 (where A is the parsing result type deduced by the production rules)
 
-## body
+### body
 The body is a list of production rules, grouped by lhs <br>
 Take a look at the example
 
-## error handling
+### error handling
 You can add error handling code with `!error:` for a nonterminal (lhs) specificcaly and for the whole parser.<br>
 If parsing fails, the specific handlers for all nonterminals that could be reduced next will be called first,<br>
 then the handler for the whole parser,
@@ -76,7 +76,7 @@ You can use `token` inside the error handler to access the token currently read.
 
 **Those are all executed, not just if the others dont exists** so you are completly free in your controlflow. You can return from each handler or just fall through to the next in the herachy or raise your own exception or whatever.
 
-# makeLexer
+## makeLexer
 Example:
 ```nim
 makeLexer lex[Token]:
@@ -101,10 +101,10 @@ inside `!error` you can also access `line` and `col`<br>
 use `!skip` to define pattern that should be ignored
 
 
-# Contribution
+## Contribution
 PRs and issues are very welcome
 
-# TODO
+## TODO
 - write better documentation
 - write more tests maybe
 - improve lexer
