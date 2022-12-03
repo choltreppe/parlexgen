@@ -1,110 +1,101 @@
 This module provides a macro for generating (LALR(1)) parsers.<br>
-It also provides one for generating lexers but the generated lexers arent realy optimal, so if you realy need best performance better use something else for the lexer.
-The syntax for the grammar definition is inspired by https://github.com/loloicci/nimly
+With focus on easy to use custom error handling.<br>
+It also provides one for generating lexers but the generated lexers arent realy optimal yet, so if you realy need best performance better use something else for the lexer.
+**This is still in developement and not ready for production**
 
-## makeParser
-here is a small example of the `makeParser` macro (details will be explained beneeth)
+Here is an example with detailed explanation:<br>
+(the type definition are omitted. take a look at tests/test1.nim for the whole code)
 ```nim
-makeParser parse[Token]:
-  stmnts[seq[Stmnt]]:
-    (stmnts, SEMI, stmnt): s1 & s3
-    stmnt: @[s1]
-
-    !error: echo "stmnts"
-
-  stmnt[Stmnt]:
-    (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.name, exp: s3)
-    (OUT, IDENT): Stmnt(kind: stmntOutput, outVar: s2.name)
-
-    !error: echo "stmnt"
-
-  mul[Exp]:
-    (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
-    add: s1
-
-    !error: echo "expected mul expression"
-
-  add[Exp]:
-    (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
-    val: s1
-
-    !error: echo "expected add expression"
-
-  val[Exp]:
-    (LPAR, mul, RPAR): s2
-    NUM: Exp(kind: ekNum, val: s1.val)
-    IDENT: Exp(kind: ekVar, name: s1.name)
-
-  !error: echo "parse error: ", token
-```
-
-### signature
-The signature defines the name of the generated proc, its input token type and if its exported.
-
-The following
-```nim
-makeParser name[T]:
-```
-generates
-```nim
-proc name(tokens: seq[T]): A =
-```
-
-and
-```nim
-makeParser name*[T]:
-```
-generates
-```nim
-proc name*(tokens: seq[T]): A =
-```
-
-(where A is the parsing result type deduced by the production rules)
-
-### body
-The body is a list of production rules, grouped by lhs <br>
-Take a look at the example
-
-### error handling
-You can add error handling code with `!error:` for a nonterminal (lhs) specificcaly and for the whole parser.<br>
-If parsing fails, the specific handlers for all nonterminals that could be reduced next will be called first,<br>
-then the handler for the whole parser,
-<br>
-an `ParsingError` is raised.
-
-You can use `token` inside the error handler to access the token currently read.
-
-**Those are all executed, not just if the others dont exists** so you are completly free in your controlflow. You can return from each handler or just fall through to the next in the herachy or raise your own exception or whatever.
-
-## makeLexer
-Example:
-```nim
+# Generates a 'proc lex(code: string): seq[Token]'
 makeLexer lex[Token]:
 
-  "out": Token(kind: OUT, line: line, col: col)
-
+  # If [0-9]+ is matched the following block is executed to build a token.
+  # Note: After the pattern is a block definition not a function,
+  #       so don't use 'return' or 'result'.
+  # Inside the block you have following vars:
+  #  match: the matched string
+  #  pos: the index of the start of the match inside the input string
+  #  line, col
   r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: line, col: col)
 
-  r"[a-zA-Z][a-zA-Z0-9]*":
-    Token(kind: IDENT, name: match, line: line, col: col)
+  # Matches get tryed top to bottom, so this should be above the ident one.
+  "out": Token(kind: OUT, line: line, col: col)
 
+  r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: line, col: col)
+
+  # You can also define rules with a loop.
+  # You can define multiple rules in one loop.
   for t in PLUS .. ASSIGN:
     (r"\" & $t): Token(kind: t, line: line, col: col)
 
-  !skip: r"[ \n\r]+"
-  !error:
-    echo line, " ", col, ": lex error"
-```
+  # Use discard to skip.
+  r"[ \n\r]+": discard
 
-inside the token building blocks you can use `match`, `line`, `col` to access the matched string an pos in ininput string.<br>
-inside `!error` you can also access `line` and `col`<br>
-use `!skip` to define pattern that should be ignored
+
+# Generates a 'proc parse*(tokens: seq[Token]): seq[Stmnt]'
+makeParser parse*[Token]:
+
+  # define all rules with the same lefthand side in one block,
+  # with the resulting type anotated.
+  stmnts[seq[Stmnt]]:
+    # List of cases with if folowed by the rhs of the production rule
+    # Note: Like in the lexer, producing code if not a seperate function so returning would return from the whole parsing function
+    if (stmnts, SEMI, stmnt): s1 & s3
+    if stmnt: @[s1]
+
+  stmnt[Stmnt]:
+    if (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.name, exp: s3)
+    
+    if (OUT, IDENT):
+      debugEcho "found out statement"
+      Stmnt(kind: stmntOutput, outVar: s2.name)
+
+  mul[Exp]:
+    if (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
+    # Optionaly you can add a else case to your rule
+    # This gets executed when parsing fails,
+    # and this rule is one of the possible next rules that would be reduced
+    # Inside this block you have the following vars:
+    #  pos: the position inside your rule (so 0: mul, 1: ASTERIX, 2: add)
+    #       and 3 is just behind the rule
+    #       this var is range[0..len(rule)]
+    #  token: this is either some(token), the token currently read
+    #         or none if its at EOF
+    # After this block is executed, the function doesnt return automatically.
+    # This is because it could happen that multiple rules could be reduced next,
+    # so all of those error handlers get called, if they exist.
+    # And afterwards a ParsingError is raised.
+    # But you can return yourself from inside the else block if you want
+    else:
+      echo:
+        case pos
+        of 0, 2: "expected number or math expression"
+        of 1:    "invalid math expression"
+        of 3:    "unexpected " & $token & " after math expression"
+    
+    if add: s1
+
+  add[Exp]:
+    if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
+    if val: s1
+
+  val[Exp]:
+    if (LPAR, mul, RPAR): s2
+    if NUM: Exp(kind: ekNum, val: s1.val)
+    if IDENT: Exp(kind: ekVar, name: s1.name)
+    
+
+echo parse(lex(dedent"""
+  a = (1+3) * 3;
+  out a;
+  b = a * 2;
+  out b
+"""))
+```
 
 
 ## Contribution
 PRs and issues are very welcome
 
 ## TODO
-- write better documentation
-- write more tests maybe
-- improve lexer
+- improve lexer ?

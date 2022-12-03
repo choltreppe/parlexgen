@@ -87,18 +87,6 @@ macro makeParser*(head,body: untyped): untyped =
 
   body.expectKindError(nnkStmtList, "expected list of rules")
 
-  template tryParseErrorHandler(node, curHandler: NimNode, body: untyped) =
-    if node.kind == nnkPrefix:
-      node[0].expectKind(nnkIdent)
-      node[1].expectKind(nnkIdent)
-      node[2].expectKind(nnkStmtList)
-      assertError(node[0].strVal == "!", "unexpected '" & node[0].strVal & "'", node[0])
-      assertError(node[1].strVal.eqIdent("error"), "unexpected '" & node[1].strVal & "' did you mean 'error' ?", node[1])
-      assertError(curHandler.kind == nnkEmpty, "double definition of error handler", node)
-      let it {.inject.} = node[2]
-      body
-      continue
-
   # there is already 1 terminal with no type for S' start symbol
   var
     nonterminals:    seq[tuple[name: string, resTypeId: int]] = @[("", 0)]
@@ -106,15 +94,7 @@ macro makeParser*(head,body: untyped): untyped =
     resTypes:        seq[NimNode]
     resTypeNtMap:    seq[seq[int]]  # resType id -> seq[nt ids that have that type]
 
-    globalErrorHandler = newEmptyNode()
-    globalErrorHandlerPos = -1  # for skipping when parsing rules
-
   for (i, rules) in body.pairs:
-
-    tryParseErrorHandler(rules, globalErrorHandler):
-      globalErrorHandler = it
-      globalErrorHandlerPos = i
-
     rules.expectKindError(nnkCall, "expected collection of rules for a nonterminal")
     rules[0].expectKindError(nnkBracketExpr, "expected nonterminal with type")
     rules[0][0].expectKindError(nnkIdent, "expected nonterminal name")
@@ -135,25 +115,33 @@ macro makeParser*(head,body: untyped): untyped =
 
   var
     ruleSets: seq[MRules]  # lhs (nont. id) -> seq[rhs] (options)
-    errorHandlers = newSeqWith(len(nonterminals), newEmptyNode())  # nonterminal/lhs -> error handler
     reduceNimNode: seq[NimNode]  # only for errors
+    errorHandlers: seq[NimNode]
 
   # start rule: S' -> S
   ruleSets &= @[MRuleRhs(pattern: @[newNonTerminal(1)], reduceId: -1)]
 
   var curReduceId = 0
   for (i, rules) in body.pairs:
-    if i == globalErrorHandlerPos: continue
     rules[1].expectKind(nnkStmtList)
     
     ruleSets &= @[]
     for rule in rules[1]:
 
-      tryParseErrorHandler(rule, errorHandlers[high(ruleSets)]):
-        errorHandlers[high(ruleSets)] = it
+      rule.expectKindError(nnkIfStmt, "expected if statement")
+      rule[0].expectKind(nnkElifBranch)
 
-      rule.expectKindError(nnkCall, "expected a rule rhs with AST geration code")
-      reduceNimNode &= rule
+      errorHandlers.add:
+        case len(rule)
+        of 1: newEmptyNode()
+        of 2:
+          rule[1].expectKindError(nnkElse, "unexpected elif")
+          rule[1][0]
+        else:
+          error "unexpected elifs", rule
+          newEmptyNode()
+
+      reduceNimNode &= rule[0]
 
       ruleSets[^1] &= MRuleRhs(reduceId: curReduceId)
       inc curReduceId
@@ -171,13 +159,14 @@ macro makeParser*(head,body: untyped): untyped =
           else:
             newTerminal(symName)
 
-      case rule[0].kind
+      let pattern = rule[0][0]
+      case pattern.kind
       of nnkTupleConstr:
-        for (i, sym) in rule[0].pairs: parseSymbol(i, sym)
+        for (i, sym) in pattern.pairs: parseSymbol(i, sym)
       of nnkPar:
-        parseSymbol(0, rule[0][0], single = true)
+        parseSymbol(0, pattern[0], single = true)
       else:
-        parseSymbol(0, rule[0], single = true)
+        parseSymbol(0, pattern, single = true)
 
   # assert all nts just have one ruleset
   assert len(nonterminals) == len(ruleSets)
@@ -384,15 +373,17 @@ macro makeParser*(head,body: untyped): untyped =
       procResType = resTypes[0]
       symbolType = quote do: Symbol[`tokenType`, `nonterminalType`]
 
-      action       = genSym(nskLet, "action")
-      goto         = genSym(nskLet, "goto" )
+      action       = genSym(nskConst, "action")
+      goto         = genSym(nskConst, "goto" )
       stack        = genSym(nskVar, "stack")
       curState     = genSym(nskVar, "state")
       curToken     = genSym(nskLet, "token")
       curTokenKind = genSym(nskLet, "tokenKind")
       curReduceId  = genSym(nskLet, "reduceId")
-      failedNtId   = genSym(nskForVar, "nt")
+      errorId      = genSym(nskForVar, "id")
       tokenForError = ident"token"
+      errorDotPos   = genSym(nskForVar, "pos")
+      errorDotPosRanged = ident"pos"
       
       kindField = ident"kind"  # just too workaround a quote bug
 
@@ -487,7 +478,7 @@ macro makeParser*(head,body: untyped): untyped =
                   let `param` = `elem`.nt.`field`
 
           let field  = ident(nonterminalVariantPrefix & $nonterminals[lhs].resTypeId)
-          let action = body[lhsm1][1][rhsId][1]
+          let action = body[lhsm1][1][rhsId][0][1]
           action.expectKind(nnkStmtList)
           branchBody.add: quote do:
             let originState =
@@ -515,20 +506,33 @@ macro makeParser*(head,body: untyped): untyped =
 
       caseStmt
 
-    # saves nts that might be reduced in the future for error handling 
-    let statePotentialNtLookupDef = block:
+    # saves rule setup of what might be reduced in the future for error handling
+    var patternLens: seq[int]
+    let stateErrorDataDef = block:
       var lookup = nnkBracket.newTree()
       for items in stateItems:
-        let nts = items.mapIt(it.ruleIdDot.id.rule).deduplicate
+        var data: seq[tuple[id,pos: int]]
+        for item in items:
+          let rhs = ruleSets[item.ruleIdDot.id]
+          patternLens &= len(rhs.pattern)
+          let id = rhs.reduceId
+          if id >= 0 and errorHandlers[id].kind != nnkEmpty:
+            data &= (id, item.ruleIdDot.dotPos)
         lookup.add:
-          genAst(nts): nts
+          genAst(data): data
       lookup
 
     let errorHandlingCaseStmt = block:
-      var caseStmt = nnkCaseStmt.newTree(failedNtId)
+      var caseStmt = nnkCaseStmt.newTree(errorId)
       for (i, body) in errorHandlers.pairs:
-        if body.kind == nnkStmtList:
-          caseStmt.add nnkOfBranch.newTree(newLit(i), body)
+        if body.kind != nnkEmpty:
+          let l = patternLens[i]
+          caseStmt.add nnkOfBranch.newTree(
+            newLit(i),
+            quote do:
+              let `errorDotPosRanged` = range[0 .. `l`](`errorDotPos`)
+              `body`
+          )
       caseStmt.add nnkElse.newTree(
         quote do: discard
       )
@@ -547,11 +551,11 @@ macro makeParser*(head,body: untyped): untyped =
 
         `getTokenKindType`
 
-        let
-          `goto`  : GotoTable[`stateNum`, `ntNum`]  = `gotoTableDef`
-          `action`: ActionTable[`stateNum`, `tokenKindType`] = `actionTableDef`
+        const
+          `goto`   : GotoTable[`stateNum`, `ntNum`]  = `gotoTableDef`
+          `action` : ActionTable[`stateNum`, `tokenKindType`] = `actionTableDef`
 
-          potentialNts: array[`stateNum`, seq[int]] = `statePotentialNtLookupDef`
+          stateErrorData : array[`stateNum`, seq[tuple[id,pos: int]]] = `stateErrorDataDef`
 
         var
           `stack`: seq[tuple[s: `symbolType`, state: int]]
@@ -578,7 +582,9 @@ macro makeParser*(head,body: untyped): untyped =
 
           of actionReduce:
             let `curReduceId` = action.id
+            {.hint[XDeclaredButNotUsed]:off.}
             `reduceCaseStmt`
+            {.hint[XDeclaredButNotUsed]:on.}
 
           of actionAccept:
             assert len(`stack`) == 1
@@ -587,8 +593,9 @@ macro makeParser*(head,body: untyped): untyped =
           of actionNone:
             let `tokenForError` = token
             {.warning[UnreachableCode]:off.}
-            for `failedNtId` in potentialNts[`curState`]:
+            {.hint[XDeclaredButNotUsed]:off.}
+            for (`errorId`, `errorDotPos`) in stateErrorData[`curState`]:
               `errorHandlingCaseStmt`
-              `globalErrorHandler`
-              raise ParsingError(msg: "parsing failed")
+            raise ParsingError(msg: "parsing failed")
             {.warning[UnreachableCode]:on.}
+            {.hint[XDeclaredButNotUsed]:on.}

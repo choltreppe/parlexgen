@@ -4,6 +4,7 @@ import ./utils
 
 
 type LexingError* = ref object of CatchableError
+  pos*: int
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
@@ -12,7 +13,7 @@ macro makeLexer*(head,body: untyped): untyped =
 
   let
     code   = genSym(nskParam, "code")
-    pos    = genSym(nskVar  , "pos" )
+    pos    = ident"pos"
     line   = ident"line"
     col    = ident"col"
     match  = ident"match"
@@ -30,44 +31,7 @@ macro makeLexer*(head,body: untyped): untyped =
     skipPatternDefined = false
     errorHandler = newEmptyNode()
 
-  proc addMatchingAttempt(pattern, body: NimNode) =
-    let regexId = len(regexsDef)
-    regexsDef.add quote do: re(`pattern`)
-    matchingAttempts.add quote do:
-      let l = `code`.matchLen(`regexs`[`regexId`], `pos`)
-      if l >= 0:
-        let `match` = `code`[`pos` ..< `pos` + l]
-        `body`
-        `pos` += l
-        `col` += l - `match`.count({'\n', '\r'})
-        continue
-
   for rule in body:
-
-    # -- special handlers: ---
-
-    if rule.kind == nnkPrefix:
-      rule[0].expectKind(nnkIdent)
-      rule[1].expectKind(nnkIdent)
-      rule[2].expectKind(nnkStmtList)
-      assertError(rule[0].strVal == "!", "unexpected '" & rule[0].strVal & "'", rule[0])
-
-      if rule[1].strVal.eqIdent("skip"):
-        assertError(not skipPatternDefined, "double definition of skip pattern", rule)
-        assertError(len(rule[2]) == 1, "expected just a string literal", rule[2])
-        # TODO: verify rule[2][0] is string (not neccesary literal)
-        addMatchingAttempt rule[2][0], newEmptyNode()
-
-      elif rule[1].strVal.eqIdent("error"):
-        rule[2].expectKind(nnkStmtList)
-        assertError(errorHandler.kind == nnkEmpty, "double definition of error handler", rule)
-        errorHandler = rule[2]
-
-      else:
-        error "unexpected '" & rule[1].strVal & "'", rule[1]
-
-      skipPatternDefined = true
-      continue
 
     # -- loops of rules: --
 
@@ -94,7 +58,7 @@ macro makeLexer*(head,body: untyped): untyped =
           let l = `code`.matchLen(`loopRegexs`[`regexId`][`loopRegexCount`], `pos`)
           if l >= 0:
             let `match` = `code`[`pos` ..< `pos` + l]
-            `tokens` &= `action`
+            `tokens`.add: `action`
             `pos` += l
             `col` += l - `match`.count({'\n', '\r'})
             `loopGotMatch` = true
@@ -123,8 +87,20 @@ macro makeLexer*(head,body: untyped): untyped =
     # TODO: verify rule[0] is string (not neccesary literal)
     let pattern = rule[0]
     let action  = rule[1]
-    addMatchingAttempt pattern, quote do:
-      `tokens` &= `action`
+    let regexId = len(regexsDef)
+    regexsDef.add quote do: re(`pattern`)
+    let body =
+      if len(action) == 1 and action[0].kind == nnkDiscardStmt: newEmptyNode()
+      else: quote do: `tokens`.add: `action`
+    matchingAttempts.add quote do:
+      let l = `code`.matchLen(`regexs`[`regexId`], `pos`)
+      if l >= 0:
+        let `match` = `code`[`pos` ..< `pos` + l]
+        `body`
+        `pos` += l
+        `col` += l - `match`.count({'\n', '\r'})
+        continue
+      
 
   result = quote do:
     proc `procIdent`(`code`: string): seq[`tokenType`] =
@@ -137,7 +113,4 @@ macro makeLexer*(head,body: untyped): untyped =
           inc `line`
           `col` = 0
         `matchingAttempts`
-        {.warning[UnreachableCode]:off.}
-        `errorHandler`
-        raise LexingError(msg: "lexing error at (" & $`line` & ", " & $`col` & ")")
-        {.warning[UnreachableCode]:on.}
+        raise LexingError(pos: `pos`, msg: "lexing error at (" & $`line` & ", " & $`col` & ")")
