@@ -1,7 +1,7 @@
 import fusion/matching
 import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm]
 
-import ./utils
+import ./private/utils
 
 # runtime
 type

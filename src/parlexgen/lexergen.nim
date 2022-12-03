@@ -1,6 +1,6 @@
 import std/[macros, re]
 
-import ./utils
+import ./private/utils
 
 
 type LexingError* = ref object of CatchableError
