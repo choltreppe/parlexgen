@@ -30,12 +30,16 @@ macro makeLexer*(head,body: untyped): untyped =
     loopRegexsDef = nnkBracket.newTree()
     skipPatternDefined = false
     errorHandler = newEmptyNode()
+    hasNormalDefs = false
+    hasLoopDefs = false
 
   for rule in body:
 
     # -- loops of rules: --
 
     if rule.kind == nnkForStmt:
+      hasLoopDefs = true
+
       let
         elem = rule[0]
         vals = rule[1]
@@ -82,6 +86,7 @@ macro makeLexer*(head,body: untyped): untyped =
       continue
 
     # -- normal rules: --
+    hasNormalDefs = true
 
     rule.expectKindError({nnkCall, nnkCommand}, "expected pattern with token generation code")
     # TODO: verify rule[0] is string (not neccesary literal)
@@ -100,12 +105,25 @@ macro makeLexer*(head,body: untyped): untyped =
         `pos` += l
         `col` += l - `match`.count({'\n', '\r'})
         continue
-      
+
+  let assignRegexs =
+    if hasNormalDefs:
+      quote do:
+        let `regexs` {.global.} = `regexsDef`
+    else:
+      newEmptyNode()
+
+  let assignLoopRegexs =
+    if hasLoopDefs:
+      quote do:
+        let `loopRegexs` {.global.} = `loopRegexsDef`
+    else:
+      newEmptyNode()
 
   result = quote do:
     proc `procIdent`(`code`: string): seq[`tokenType`] =
-      let `regexs`     {.global.} = `regexsDef`
-      let `loopRegexs` {.global.} = `loopRegexsDef`
+      `assignRegexs`
+      `assignLoopRegexs`
       var `pos` = 0
       var `line`, `col` = 1
       while `pos` < len(`code`):
