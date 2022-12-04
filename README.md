@@ -6,7 +6,7 @@ It also provides one for generating lexers but the generated lexers arent realy 
 Here is an example with detailed explanation:<br>
 (the type definition are omitted. take a look at tests/test1.nim for the whole code)
 ```nim
-# Generates a 'proc lex(code: string): seq[Token]'
+# Generates a ParserProc[Token]  (take a look at src/parlexgen/common.nim for details)
 makeLexer lex[Token]:
 
   # If [0-9]+ is matched the following block is executed to build a token.
@@ -32,7 +32,7 @@ makeLexer lex[Token]:
   r"[ \n\r]+": discard
 
 
-# Generates a 'proc parse*(tokens: seq[Token]): seq[Stmnt]'
+# Generates a 'proc parse*(code: string, lexer: LexerProc[Token]): seq[Stmnt]'
 makeParser parse*[Token]:
 
   # define all rules with the same lefthand side in one block,
@@ -85,12 +85,15 @@ makeParser parse*[Token]:
     if IDENT: Exp(kind: ekVar, name: s1.name)
     
 
-echo parse(lex(dedent"""
-  a = (1+3) * 3;
-  out a;
-  b = a * 2;
-  out b
-"""))
+echo parse(
+  dedent"""
+    foo = (1+3) * 3;
+    out foo;
+    b = foo * 2;
+    out b
+  """,
+  lex
+)
 ```
 
 

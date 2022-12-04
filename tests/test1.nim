@@ -1,7 +1,10 @@
 import unittest
 import parlexgen
 
-import std/[strutils, strformat, sequtils, options, macros]
+import std/[strutils, strformat, sequtils, options, macros, genasts]
+import fusion/matching
+
+import parlexgen/common
 
 test "test":
   type
@@ -51,16 +54,16 @@ test "test":
 
   makeLexer lex[Token]:
 
-    r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: line, col: col)
+    r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: 0, col: 0)
 
-    "out": Token(kind: OUT, line: line, col: col)
+    "out": Token(kind: OUT, line: 0, col: 0)
 
-    r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: line, col: col)
+    r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: 0, col: 0)
 
     for t in PLUS .. ASSIGN:
-      (r"\" & $t): Token(kind: t, line: line, col: col)
+      (r"\" & $t): Token(kind: t, line: 0, col: 0)
 
-    r"[ \n\r]+": discard
+    r"\s+": continue
 
 
   makeParser parse[Token]:
@@ -103,10 +106,13 @@ test "test":
       
 
   check:
-    $parse(lex(dedent"""
-      a = (1+3) * 3;
-      out a;
-      b = a * 2;
-      out b
-    """)) ==
+    $parse(
+      dedent"""
+        a = (1+3) * 3;
+        out a;
+        b = a * 2;
+        out b
+      """,
+      lex
+    ) ==
     "a = ((1 + 3) * 3); out a; b = (a * 2); out b"

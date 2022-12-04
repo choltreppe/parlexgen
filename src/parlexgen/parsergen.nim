@@ -1,7 +1,7 @@
 import fusion/matching
 import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm]
 
-import ./private/utils
+import ./private/utils, ./common
 
 # runtime
 type
@@ -545,7 +545,7 @@ macro makeParser*(head,body: untyped): untyped =
       ntNum = newLit(len(nonterminals))
 
     quote do:
-      proc `procIdent`(tokens: seq[`tokenType`]): `procResType` =
+      proc `procIdent`(code: string, lexProc: LexerProc[`tokenType`]): `procResType` =
 
         type `nonterminalType` = `nonterminalTypeDef`
 
@@ -562,14 +562,15 @@ macro makeParser*(head,body: untyped): untyped =
           `curState` = 0
           pos = 0
 
+          lexerState = initLexerState()
+          token = lexProc(code, lexerState)
+
         while true:
 
           let actionRow = `action`[`curState`]
-          let (token, action) =
-            if pos < len(tokens):
-              (some(tokens[pos]), actionRow.terminals[tokens[pos].kind])
-            else:
-              (none(`tokenType`), actionRow.eof)
+          let action =
+            if token.isSome: actionRow.terminals[token.unsafeGet.kind]
+            else: actionRow.eof
 
           case action.kind
           of actionShift:
@@ -578,7 +579,7 @@ macro makeParser*(head,body: untyped): untyped =
               `symbolType`(kind: symTerminal, token: token.get),
               `curState`
             )
-            inc pos
+            token = lexProc(code, lexerState)
 
           of actionReduce:
             let `curReduceId` = action.id
