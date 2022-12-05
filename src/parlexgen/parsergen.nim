@@ -69,10 +69,9 @@ func `<`(a,b: MItem): bool = a.ruleIdDot < b.ruleIdDot
 
 macro makeParser*(head,body: untyped): untyped =
 
-  const
-    actionParamPrefix = "s"
-    nonterminalVariantPrefix = "t"
+  const nonterminalVariantPrefix = "t"
   let
+    matchedRuleTuple = ident"s"
     nonterminalType = genSym(nskType, "NonTerminal")
 
   # --- meta infos: ---
@@ -453,34 +452,39 @@ macro makeParser*(head,body: untyped): untyped =
           var branchBody = newStmtList: quote do:
             assert len(`stack`) >= `patternLen`
 
-          for (i, symbol) in rhs.pattern.reversed.pairs:
+          var matchedRuleTupleDef = nnkTupleConstr.newTree()
+
+          for (i, symbol) in rhs.pattern.pairs:
             let elem = genSym(nskLet, "elem")
-            let param = ident(actionParamPrefix & $(patternLen-i))
+            let revIndex = patternLen-i
 
             branchBody.add quote do:
-              let (`elem`, _) = pop(`stack`)
+              let (`elem`, _) = `stack`[^`revIndex`]
 
-            branchBody.add:
-              case symbol.kind
-              of mSymTerminal:
-                let terminal = ident(symbol.name)
-                quote do:
-                  assert `elem`.kind == symTerminal
-                  assert `elem`.token.kind == `terminal`
-                  let `param` = `elem`.token
+            case symbol.kind
+            of mSymTerminal:
+              let terminal = ident(symbol.name)
+              branchBody.add quote do:
+                assert `elem`.kind == symTerminal
+                assert `elem`.token.kind == `terminal`
+              matchedRuleTupleDef.add quote do:
+                `elem`.token
 
-              of mSymNonTerminal:
-                let ntId = symbol.id
-                let field = ident(nonterminalVariantPrefix & $nonterminals[ntId].resTypeId)
-                quote do:
-                  assert `elem`.kind == symNonTerminal
-                  assert `elem`.nt.id == `ntId`
-                  let `param` = `elem`.nt.`field`
+            of mSymNonTerminal:
+              let ntId = symbol.id
+              let field = ident(nonterminalVariantPrefix & $nonterminals[ntId].resTypeId)
+              branchBody.add quote do:
+                assert `elem`.kind == symNonTerminal
+                assert `elem`.nt.id == `ntId`
+              matchedRuleTupleDef.add quote do:
+                `elem`.nt.`field`
 
           let field  = ident(nonterminalVariantPrefix & $nonterminals[lhs].resTypeId)
           let action = body[lhsm1][1][rhsId][0][1]
           action.expectKind(nnkStmtList)
           branchBody.add: quote do:
+            let `matchedRuleTuple` = `matchedRuleTupleDef`
+            `stack`.setLen(len(`stack`) - `patternLen`)
             let originState =
               if len(`stack`) > 0: `stack`[^1].state
               else: 0
@@ -594,9 +598,7 @@ macro makeParser*(head,body: untyped): untyped =
           of actionNone:
             let `tokenForError` = token
             {.warning[UnreachableCode]:off.}
-            {.hint[XDeclaredButNotUsed]:off.}
             for (`errorId`, `errorDotPos`) in stateErrorData[`curState`]:
               `errorHandlingCaseStmt`
             raise ParsingError(msg: "parsing failed")
             {.warning[UnreachableCode]:on.}
-            {.hint[XDeclaredButNotUsed]:on.}

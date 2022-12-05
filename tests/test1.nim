@@ -72,16 +72,16 @@ test "test":
 
   makeParser parse[Token]:
     stmnts[seq[Stmnt]]:
-      if (stmnts, SEMI, stmnt): s1 & s3
-      if stmnt: @[s1]
+      if (stmnts, SEMI, stmnt): s[0] & s[2]
+      if stmnt: @[s[0]]
 
     stmnt[Stmnt]:
-      if (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.name, exp: s3)
+      if (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s[0].name, exp: s[2])
       
-      if (OUT, IDENT): Stmnt(kind: stmntOutput, outVar: s2.name)
+      if (OUT, IDENT): Stmnt(kind: stmntOutput, outVar: s[1].name)
 
     mul[Exp]:
-      if (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
+      if (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s[0], right: s[2])
       else:
         echo:
           case pos
@@ -89,23 +89,23 @@ test "test":
           of 1:    "invalid math expression"  # should nerver happen
           of 3:    "unexpected " & $token & " after math expression"  # should also never happen i think
       
-      if add: s1
+      if add: s[0]
 
     add[Exp]:
-      if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
+      if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s[0], right: s[2])
       else: echo 7
 
-      if val: s1
+      if val: s[0]
       else: echo 8
 
     val[Exp]:
-      if (LPAR, mul, RPAR): s2
+      if (LPAR, mul, RPAR): s[1]
       else: echo 9
 
-      if NUM: Exp(kind: ekNum, val: s1.val)
+      if NUM: Exp(kind: ekNum, val: s[0].val)
       else: echo 10
       
-      if IDENT: Exp(kind: ekVar, name: s1.name)
+      if IDENT: Exp(kind: ekVar, name: s[0].name)
       else: echo 11
       
 

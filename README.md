@@ -1,6 +1,8 @@
-This module provides a macro for generating (LALR(1)) parsers.<br>
+This module provides a macro for generating lexers and parsers (LALR(1))<br>
 With focus on easy to use custom error handling.<br>
-It also provides one for generating lexers but the generated lexers arent realy optimal yet, so if you realy need best performance better use something else for the lexer.
+
+The lexer is build on top of [lexim](https://github.com/Araq/lexim)
+
 **This is still in developement and not ready for production**
 
 Here is an example with detailed explanation:<br>
@@ -9,7 +11,7 @@ Here is an example with detailed explanation:<br>
 # Generates a ParserProc[Token]  (take a look at src/parlexgen/common.nim for details)
 makeLexer lex[Token]:
 
-  # If [0-9]+ is matched the following block is executed to build a token.
+  # If the pattern ("out") is matched the following block is executed to build a token.
   # Note: After the pattern is a block definition not a function,
   #       so don't use 'return' or 'result'.
   # Inside the block you have following vars:
@@ -42,27 +44,31 @@ makeParser parse*[Token]:
   # define all rules with the same lefthand side in one block,
   # with the resulting type anotated.
   stmnts[seq[Stmnt]]:
-    # List of cases with if folowed by the rhs of the production rule
+
+    # List of different rules for this nt
+    # You have access to 's', a tuple of the matched symbols.
+    #  In this first case of type: (seq[Stmnt], Token, Stmnt)
     # Note: Like in the lexer, producing code if not a seperate function so returning would return from the whole parsing function
-    if (stmnts, SEMI, stmnt): s1 & s3
-    if stmnt: @[s1]
+    if (stmnts, SEMI, stmnt): s[0] & s[2]
+
+    if stmnt: @[s[0]]
 
   stmnt[Stmnt]:
-    if (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s1.name, exp: s3)
+    if (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s[0].name, exp: s[2])
     
     if (OUT, IDENT):
       debugEcho "found out statement"
-      Stmnt(kind: stmntOutput, outVar: s2.name)
+      Stmnt(kind: stmntOutput, outVar: s[1].name)
 
   mul[Exp]:
-    if (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s1, right: s3)
+    if (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s[0], right: s[2])
+
     # Optionaly you can add a else case to your rule
     # This gets executed when parsing fails,
     # and this rule is one of the possible next rules that would be reduced
     # Inside this block you have the following vars:
-    #  pos: the position inside your rule (so 0: mul, 1: ASTERIX, 2: add)
-    #       and 3 is just behind the rule
-    #       this var is range[0..len(rule)]
+    #  pos: the position inside your rule (so 0: mul, 1: ASTERIX, 2: add, 3: just behind)
+    #       this var is alway of type range[0..len(rule)]
     #  token: this is either some(token), the token currently read
     #         or none if its at EOF
     # After this block is executed, the function doesnt return automatically.
@@ -77,16 +83,16 @@ makeParser parse*[Token]:
         of 1:    "invalid math expression"
         of 3:    "unexpected " & $token & " after math expression"
     
-    if add: s1
+    if add: s[0]
 
   add[Exp]:
-    if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s1, right: s3)
-    if val: s1
+    if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s[0], right: s[2])
+    if val: s[0]
 
   val[Exp]:
-    if (LPAR, mul, RPAR): s2
-    if NUM: Exp(kind: ekNum, val: s1.val)
-    if IDENT: Exp(kind: ekVar, name: s1.name)
+    if (LPAR, mul, RPAR): s[1]
+    if NUM: Exp(kind: ekNum, val: s[0].val)
+    if IDENT: Exp(kind: ekVar, name: s[0].name)
     
 
 echo parse(
