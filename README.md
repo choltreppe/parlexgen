@@ -16,17 +16,21 @@ makeLexer lex[Token]:
   #  match: the matched string
   #  pos: the index of the start of the match inside the input string
   #  line, col
-  r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: line, col: col)
-
-  # Matches get tryed top to bottom, so this should be above the ident one.
   "out": Token(kind: OUT, line: line, col: col)
+
+  r"[0-9]+":
+    echo "found number " & match & " at (" & $line & ", " & $col & ")"
+    Token(kind: NUM, val: parseInt(match), line: line, col: col)
 
   r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: line, col: col)
 
   # You can also define rules with a loop.
+  # The loop must be compile-time computable
   # You can define multiple rules in one loop.
   for t in PLUS .. ASSIGN:
     (r"\" & $t): Token(kind: t, line: line, col: col)
+
+  # The patterns don't have to be string literals, they can be any compile-time expression
 
   # Use discard to skip.
   r"[ \n\r]+": discard

@@ -52,16 +52,20 @@ test "test":
     stmnts.mapIt($it).join("; ")
 
 
+  const outPattern = "out"
+
   makeLexer lex[Token]:
 
-    r"[0-9]+": Token(kind: NUM, val: parseInt(match), line: 0, col: 0)
+    outPattern: Token(kind: OUT, line: line, col: col)
 
-    "out": Token(kind: OUT, line: 0, col: 0)
+    r"[0-9]+":
+      echo "found number " & match & " at (" & $line & ", " & $col & ")"
+      Token(kind: NUM, val: parseInt(match), line: line, col: col)
 
-    r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: 0, col: 0)
+    r"[a-zA-Z][a-zA-Z0-9]*": Token(kind: IDENT, name: match, line: line, col: col)
 
     for t in PLUS .. ASSIGN:
-      (r"\" & $t): Token(kind: t, line: 0, col: 0)
+      (r"\" & $t): Token(kind: t, line: line, col: col)
 
     r"\s+": continue
 

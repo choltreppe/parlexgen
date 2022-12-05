@@ -1,4 +1,4 @@
-import std/[macros, genasts]
+import std/[macros, genasts, sequtils, strutils]
 
 import ./private/utils, ./common
 import ./private/lexim/lexim
@@ -85,7 +85,20 @@ macro makeLexer*(head,body: untyped): untyped =
         block `matchingBlock`:
           macro impl(c: untyped) =
             `rulesSeqDef`
-            leximMatch(c, quote do: `pos`, `rules`)
+            let doEnd = quote do:
+              if `pos` < len(`code`):
+                case `code`[`pos`]:
+                of '\n':
+                  inc `state`.line
+                  `state`.col = 0
+                of '\r':
+                  `state`.col = 0
+                else:
+                  inc `state`.col
+            result = leximMatch(c, quote do: `state`.pos, `rules`, doEnd)
+
           impl(`code`)
           raise LexingError(pos: `oldPos`, msg: "lexing failed")
       return none(`tokenType`)
+
+  #debugEcho result.repr
