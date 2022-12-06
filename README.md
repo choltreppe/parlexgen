@@ -34,8 +34,8 @@ makeLexer lex[Token]:
 
   # The patterns don't have to be string literals, they can be any compile-time expression
 
-  # Use discard to skip.
-  r"[ \n\r]+": discard
+  # Use continue to skip (or discard).
+  r"[ \n\r]+": continue
 
 
 # Generates a 'proc parse*(code: string, lexer: LexerProc[Token]): seq[Stmnt]'

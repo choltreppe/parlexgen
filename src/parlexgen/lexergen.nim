@@ -1,4 +1,5 @@
-import std/[macros, genasts, sequtils, strutils]
+import std/[macros, genasts, sequtils, strutils, options]
+export options
 
 import ./private/utils, ./common
 import ./private/lexim/lexim
@@ -16,7 +17,6 @@ macro makeLexer*(head,body: untyped): untyped =
   let
     code   = genSym(nskParam, "code")
     state  = genSym(nskParam, "state")
-    pos    = newDotExpr(state, ident"pos")
     oldPos = ident"pos"
     line   = ident"line"
     col    = ident"col"
@@ -32,7 +32,7 @@ macro makeLexer*(head,body: untyped): untyped =
     action.expectKind(nnkStmtList)
 
     let matchBody =
-      if len(action) == 1 and action[0].kind == nnkContinueStmt:
+      if len(action) == 1 and action[0].kind in {nnkContinueStmt, nnkDiscardStmt}:
         newStmtList(nnkBreakStmt.newTree(matchingBlock))
       else:
         genAst(action, code, state, match, oldPos):
@@ -86,8 +86,8 @@ macro makeLexer*(head,body: untyped): untyped =
           macro impl(c: untyped) =
             `rulesSeqDef`
             let doEnd = quote do:
-              if `pos` < len(`code`):
-                case `code`[`pos`]:
+              if `state`.pos < len(`code`):
+                case `code`[`state`.pos]:
                 of '\n':
                   inc `state`.line
                   `state`.col = 0
