@@ -34,4 +34,4 @@ proc main(input: string): string =
   optimizeDFA(d, o, alph)
   result = $$o
 
-echo main(readFile("lexe.input"))
+echo main(readLine(stdin))

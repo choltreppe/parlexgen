@@ -95,7 +95,7 @@ template `/.`(x: string): string =
   (when defined(posix): "./" & x else: x)
 
 proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: NimNode]]; doStepEnd: NimNode): NimNode =
-  when true:
+  when false:
     var bigRe: PRegExpr = nil
     var rule = 1
     for (pattern, body) in sections:
@@ -115,13 +115,14 @@ proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: Nim
     result = genMatcher(o, s, pos, sections, doStepEnd)
   else:
     # use 'lexe.exe' helper program in order to speedup lexer generation
+    discard staticExec("nim c lexe.nim", cache="lexe") # compile lexe (if not already)
+
     var res: seq[string] = @[]
     for (pattern, body) in sections:
       res.add pattern
 
     let data = $$res
-    writeFile("lexe.input", data)
-    let o = to[DFA](staticExec(/."lexe", input="", cache=data))
+    let o = to[DFA](staticExec(/."lexe", input=data&"\n", cache=data))
     result = genMatcher(o, s, pos, sections, doStepEnd)
   #echo repr result
 
