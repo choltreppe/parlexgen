@@ -1,5 +1,6 @@
 import fusion/matching
 import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm]
+export sets
 
 import ./private/utils, ./common
 
@@ -12,14 +13,14 @@ type
     of symNonTerminal: nt: N
 
   ActionKind = enum actionNone, actionShift, actionReduce, actionAccept
-  Action = object
+  Action* = object
     case kind: ActionKind
     of actionShift:  goto: int
     of actionReduce: id:   int
     else: discard
-  ActionTable[L: static int, T: enum] = array[L, tuple[terminals: array[T, Action], eof: Action]]
+  ActionTable[S: static int, T: enum] = array[S, tuple[terminals: array[T, Action], eof: Action]]
 
-  GotoTable[L, N: static int] = array[L, array[N, int]]
+  GotoTable[S, N: static int] = array[S, array[N, int]]
 
   ParsingError* = ref object of CatchableError
 
@@ -30,154 +31,64 @@ func `$`*(symbol: Symbol): string =
 
 # meta
 type
-  MTerminal = string  # token kind  (empty string means $)
-  MNonTerminal = int  # id
   MSymbolKind = enum mSymTerminal, mSymNonTerminal
-  MSymbol = object
+  MSymbol[T: enum] = object
     case kind: MSymbolKind
-    of mSymTerminal:    name: MTerminal
-    of mSymNonTerminal: id:   MNonTerminal
-  MRuleRhs = object
-    pattern: seq[MSymbol]
-    reduceId: int
-  MRules = seq[MRuleRhs]
+    of mSymTerminal:    tk: T
+    of mSymNonTerminal: id: int
+  MRuleRhs[T: enum] = object
+    pattern: seq[MSymbol[T]]
+    blockId: int  # id for reduce action and error handler
+  MRules[T: enum] = seq[MRuleRhs[T]]
 
   MRuleId = tuple[rule,rhs: int]
   MRuleIdDotted = tuple
     id: MRuleId
     dotPos: int
-  MLookahead = HashSet[MTerminal]
-  MItem = object
+  MTerminalOrEof[T: enum] = object
+    case isEOF: bool
+    of true: discard
+    else: tk: T
+  MLookahead[T: enum] = HashSet[MTerminalOrEof[T]]
+  MItem[T: enum] = object
     ruleIdDot: MRuleIdDotted
-    lookahead: MLookahead
+    lookahead: MLookahead[T]
 
-func `==`(a, b: MSymbol): bool =
+func `==`*[T](a, b: MSymbol[T]): bool =  # not liking that its exported but for some wierd binding reasons it has to
   if a.kind == b.kind:
     case a.kind
-    of mSymTerminal:    a.name == b.name
-    of mSymNonTerminal: a.id   == b.id  
+    of mSymTerminal:    a.tk == b.tk
+    of mSymNonTerminal: a.id == b.id  
   else: false
 
-func newTerminal(name: string): MSymbol = MSymbol(kind: mSymTerminal,    name: name)
-func newNonTerminal(id: int):   MSymbol = MSymbol(kind: mSymNonTerminal, id:   id  )
+func newTerminal[T](tk: T):
+  MSymbol[T] = MSymbol[T](kind: mSymTerminal, tk: tk)
+func newNonTerminal[T](td: typedesc[T], id: int):
+  MSymbol[T] = MSymbol[T](kind: mSymNonTerminal, id: id)
 
-func `[]`(rules: seq[MRules], id: MRuleId): MRuleRhs =
+func `[]`[T](rules: seq[MRules[T]], id: MRuleId): MRuleRhs[T] =
   rules[id.rule][id.rhs]
 
-func `<`(a,b: MItem): bool = a.ruleIdDot < b.ruleIdDot
+func `==`*[T](a, b: MTerminalOrEof[T]): bool =  # not liking that its exported but for some wierd binding reasons it has to
+  if (not a.isEOF) and (not b.isEOF):
+    a.tk == b.tk 
+  else:
+    a.isEOF and b.isEOF
+
+func `<`[T](a,b: MItem[T]): bool = a.ruleIdDot < b.ruleIdDot
 
 
-macro makeParser*(head,body: untyped): untyped =
-
-  const nonterminalVariantPrefix = "t"
-  let
-    matchedRuleTuple = ident"s"
-    nonterminalType = genSym(nskType, "NonTerminal")
-
-  # --- meta infos: ---
-
-  let (procIdent, tokenType) = getProcMeta(head)
-
-  let tokenKindType = genSym(nskType, "TokenKind")
-  let getTokenKindType = quote do:
-    type `tokenKindType` = typeof(`tokenType`().kind)
-
-  # --- collect nonterminals: ---
-
-  body.expectKindError(nnkStmtList, "expected list of rules")
-
-  # there is already 1 terminal with no type for S' start symbol
-  var
-    nonterminals:    seq[tuple[name: string, resTypeId: int]] = @[("", 0)]
-    nonterminalInfo: Table[string, tuple[id, resTypeId: int]]
-    resTypes:        seq[NimNode]
-    resTypeNtMap:    seq[seq[int]]  # resType id -> seq[nt ids that have that type]
-
-  for (i, rules) in body.pairs:
-    rules.expectKindError(nnkCall, "expected collection of rules for a nonterminal")
-    rules[0].expectKindError(nnkBracketExpr, "expected nonterminal with type")
-    rules[0][0].expectKindError(nnkIdent, "expected nonterminal name")
-    let name    = rules[0][0].strVal.nimIdentNormalize
-    let resType = rules[0][1]
-    let resTypeId =
-      if (let id = resTypes.find(resType); id) != -1: id
-      else:
-        resTypes &= resType
-        resTypeNtMap &= @[]
-        high(resTypes)
-    assertError(name notin nonterminalInfo, "double definition of nonterminal", rules[0][0])
-    nonterminals &= (name, resTypeId)
-    nonterminalInfo[name] = (high(nonterminals), resTypeId)
-    resTypeNtMap[resTypeId] &= high(nonterminals)
-
-  # --- parse rules: ---
-
-  var
-    ruleSets: seq[MRules]  # lhs (nont. id) -> seq[rhs] (options)
-    reduceNimNode: seq[NimNode]  # only for errors
-    errorHandlers: seq[NimNode]
-
-  # start rule: S' -> S
-  ruleSets &= @[MRuleRhs(pattern: @[newNonTerminal(1)], reduceId: -1)]
-
-  var curReduceId = 0
-  for (i, rules) in body.pairs:
-    rules[1].expectKind(nnkStmtList)
-    
-    ruleSets &= @[]
-    for rule in rules[1]:
-
-      rule.expectKindError(nnkIfStmt, "expected if statement")
-      rule[0].expectKind(nnkElifBranch)
-
-      errorHandlers.add:
-        case len(rule)
-        of 1: newEmptyNode()
-        of 2:
-          rule[1].expectKindError(nnkElse, "unexpected elif")
-          rule[1][0]
-        else:
-          error "unexpected elifs", rule
-          newEmptyNode()
-
-      reduceNimNode &= rule[0]
-
-      ruleSets[^1] &= MRuleRhs(reduceId: curReduceId)
-      inc curReduceId
-
-      proc parseSymbol(i: int, sym: NimNode, single = false) =
-        sym.expectKindError(nnkIdent,
-          if single: "expected a nonterminal or terminal (token kind) or list of those in ()"
-          else: "expected a nonterminal or terminal (token kind)"
-        )
-
-        let symName = sym.strVal.nimIdentNormalize
-        ruleSets[^1][^1].pattern.add:
-          if symName in nonterminalInfo:
-            newNonTerminal(nonterminalInfo[symName].id)
-          else:
-            newTerminal(symName)
-
-      let pattern = rule[0][0]
-      case pattern.kind
-      of nnkTupleConstr:
-        for (i, sym) in pattern.pairs: parseSymbol(i, sym)
-      of nnkPar:
-        parseSymbol(0, pattern[0], single = true)
-      else:
-        parseSymbol(0, pattern, single = true)
-
-  # assert all nts just have one ruleset
-  assert len(nonterminals) == len(ruleSets)
+proc makeParsingTables[T](ruleSets: seq[MRules[T]], ntNum: int): tuple[action, goto: NimNode, stateNum: int] =
+  let ruleSets = ruleSets  # fix for wierd compiler bug
 
   # --- generate parsing table: ---
 
-  func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
+  proc findFirstSet(symbol: MSymbol): HashSet[T] =
     var visited: HashSet[int]
-    proc findRec(symbol: MSymbol): HashSet[MTerminal] =
+    proc findRec(symbol: MSymbol): HashSet[T] =
       case symbol.kind
       of mSymTerminal:
-        result.incl symbol.name.nimIdentNormalize
+        result.incl symbol.tk
       of mSymNonTerminal:
         if symbol.id notin visited:
           visited.incl symbol.id
@@ -186,9 +97,11 @@ macro makeParser*(head,body: untyped): untyped =
 
     findRec(symbol)
 
-  let firstSets: seq[HashSet[MTerminal]] = collect:
-    for (i, info) in nonterminals.pairs:
-      findFirstSet(newNonTerminal(i))
+  let firstSets: seq[MLookahead[T]] = collect:
+    for ntId in 0 ..< ntNum:
+      findFirstSet(newNonTerminal(T, ntId)).map(
+        proc(tk: T): MTerminalOrEof[T] = MTerminalOrEof[T](isEOF: false, tk: tk)
+      )
 
   # - build automaton: -
 
@@ -196,20 +109,20 @@ macro makeParser*(head,body: untyped): untyped =
     ruleIdDot.dotPos == len(ruleSets[ruleIdDot.id].pattern)
 
   var
-    adjacencyMat: seq[seq[Option[MSymbol]]]
-    stateItems: seq[seq[MItem]]
+    adjacencyMat: seq[seq[Option[MSymbol[T]]]]
+    stateItems: seq[seq[MItem[T]]]
     stateLookup: Table[seq[MRuleIdDotted], int]
 
   # returns state id
   # items are just the initial ones with no closure
-  proc buildStateMashine(items: seq[MItem]): int =
+  proc buildStateMashine(items: seq[MItem[T]]): int =
 
-    proc findTransitions(currentState: int, items: seq[MItem]) =
+    proc findTransitions(currentState: int, items: seq[MItem[T]]) =
       var
-        lookaheadTable: Table[MRuleIdDotted, MLookahead]
-        transitions: Table[MSymbol, seq[MRuleIdDotted]]  # the dotted rule is without the shift (because I need to lookup lookahead)
+        lookaheadTable: Table[MRuleIdDotted, MLookahead[T]]
+        transitions: Table[MSymbol[T], seq[MRuleIdDotted]]  # the dotted rule is without the shift (because I need to lookup lookahead)
 
-      proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead) =
+      proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead[T]) =
         if ruleIdDot in lookaheadTable:
           lookaheadTable[ruleIdDot].incl lookahead
 
@@ -218,7 +131,12 @@ macro makeParser*(head,body: untyped): untyped =
           lookaheadTable[ruleIdDot] = lookahead
           let pattern = ruleSets[ruleIdDot.id].pattern
           let symbol = pattern[ruleIdDot.dotPos]
-          transitions.addNewOrAppend(symbol, ruleIdDot)
+
+          if symbol in transitions:
+            transitions[symbol] &= ruleIdDot
+          else:
+            transitions[symbol] = @[ruleIdDot]
+
           if symbol.kind == mSymNonTerminal:
             let nextLookahead =
               if ruleIdDot.dotPos == high(pattern):
@@ -226,7 +144,7 @@ macro makeParser*(head,body: untyped): untyped =
               else:
                 let nextSymbol = pattern[ruleIdDot.dotPos + 1]
                 case nextSymbol.kind
-                of mSymTerminal:    toHashSet([nextSymbol.name])
+                of mSymTerminal:    toHashSet([MTerminalOrEof[T](isEOF: false, tk: nextSymbol.tk)])
                 of mSymNonTerminal: firstSets[nextSymbol.id]
             for i in 0 .. high(ruleSets[symbol.id]):
               closure(
@@ -241,7 +159,7 @@ macro makeParser*(head,body: untyped): untyped =
       for (symbol, rulesIdDot) in transitions.mpairs:
         sort rulesIdDot
         let newItems =
-          rulesIdDot.mapIt(MItem(
+          rulesIdDot.mapIt(MItem[T](
             ruleIdDot: (id: it.id, dotPos: it.dotPos + 1),
             lookahead: lookaheadTable[it]
           ))
@@ -274,31 +192,34 @@ macro makeParser*(head,body: untyped): untyped =
       stateItems &= items
       let currentState = high(stateItems)
       stateLookup[rulesIdDot] = currentState
-      adjacencyMat &= newSeqWith(len(adjacencyMat), none(MSymbol))
+      adjacencyMat &= newSeqWith(len(adjacencyMat), none(MSymbol[T]))
       for row in adjacencyMat.mitems:
-        row &= none(MSymbol)
+        row &= none(MSymbol[T])
 
       # find transitions:
       findTransitions(currentState, items)
 
       currentState
 
-  discard buildStateMashine(@[MItem(ruleIdDot: ((0, 0), 0), lookahead: toHashSet([""]))])
+  discard buildStateMashine(@[MItem[T](ruleIdDot: ((0, 0), 0), lookahead: toHashSet([MTerminalOrEof[T](isEOF: true)]))])
 
   # - build parsing table: -
 
   var
-    actionTable = newSeq[Table[MTerminal, Action]](len(stateItems))
-    gotoTable = newSeqWith(len(stateItems), newSeqWith(len(nonterminals), -1))  # (from state, nonterminal) -> target state
+    actionTable = newSeq[tuple[terminals: array[T, Action], eof: Action]](len(stateItems))
+    gotoTable = newSeqWith(len(stateItems), newSeqWith(ntNum, -1))  # (from state, nonterminal) -> target state
 
   for (fromState, row) in adjacencyMat.pairs:
-    
-    proc ruleNimNode(ruleId: MRuleId): NimNode =
-      reduceNimNode[ruleSets[ruleId].reduceId]
 
-    func lineInfoShort(node: NimNode): string =
-      let lineInfo = lineInfoObj(node)
-      "(" & $lineInfo.line & "," & $lineInfo.column & ")"
+    template addActionIfNone(fromState: int, terminal: MTerminalOrEof[T], action: Action) =
+      if terminal.isEOF:
+        if actionTable[fromState].eof.kind == actionNone:
+          actionTable[fromState].eof = action
+        continue
+      else:
+        if actionTable[fromState].terminals[terminal.tk].kind == actionNone:
+          actionTable[fromState].terminals[terminal.tk] = action
+        continue
 
     # reduces:
     for item in stateItems[fromState]:
@@ -306,23 +227,14 @@ macro makeParser*(head,body: untyped): untyped =
         let ruleId = item.ruleIdDot.id
 
         if ruleId == (0, 0):
-          actionTable[fromState][""] = Action(kind: actionAccept)
+          actionTable[fromState].eof = Action(kind: actionAccept)
 
         else:
-          let reduceId = ruleSets[item.ruleIdDot.id].reduceId
-          let action = Action(kind: actionReduce, id: reduceId)
+          let blockId = ruleSets[item.ruleIdDot.id].blockId
           for terminal in item.lookahead:
-            if terminal notin actionTable[fromState]:
-              actionTable[fromState][terminal] = action
-
-            # conflict:
-            else:
-              let curAction = actionTable[fromState][terminal]
-              assert curAction.kind == actionAccept
-              error(
-                "reduce/reduce conflict with " & lineInfoShort(reduceNimNode[curAction.id]),
-                reduceNimNode[reduceId]
-              )
+            addActionIfNone(fromState, terminal, Action(kind: actionReduce, id: blockId))
+            # else conflict:
+            error "reduce/reduce conflict"
 
     for (toState, symbol) in row.pairs:
       if Some(@symbol) ?= symbol:
@@ -330,275 +242,332 @@ macro makeParser*(head,body: untyped): untyped =
 
         # shift:
         of mSymTerminal:
-          if symbol.name notin actionTable[fromState]:
-            actionTable[fromState][symbol.name] = Action(kind: actionShift, goto: toState)
-
-          # conflict:
-          else:
-            let curAction = actionTable[fromState][symbol.name]
-            var shiftRuleNodes: seq[NimNode]
-            proc findShiftRules(state: int) =
-              for item in stateItems[state]:
-                if not isRuleEnd(item.ruleIdDot):
-                  shiftRuleNodes &= ruleNimNode(item.ruleIdDot.id)
-            findShiftRules(toState)
-            case curAction.kind
-            of actionReduce:
-              error(
-                "shift/reduce conflict with:" &
-                "  shifts: " & shiftRuleNodes[1..^1].map(lineInfoShort).join(", ") &
-                "  reduce: " & lineInfoShort(reduceNimNode[curAction.id]),
-                shiftRuleNodes[0]
-              )
-            of actionShift:
-              findShiftRules(curAction.goto)
-              error(
-                "shift/shift conflict with: " &
-                shiftRuleNodes[1..^1].map(lineInfoShort).join(", "),
-                shiftRuleNodes[0]
-              )
-            else:
-              assert false
+          let terminal = MTerminalOrEof[T](isEOF: false, tk: symbol.tk)
+          addActionIfNone(fromState, terminal, Action(kind: actionShift, goto: toState))
+          # else conflict:
+          error "shift/.. conflict" #TODO: proper error 
 
         # goto:
         of mSymNonTerminal:
           assert gotoTable[fromState][symbol.id] < 0
           gotoTable[fromState][symbol.id] = toState
 
-  # --- build code: ---
 
-  result = block:
-    let
-      procResType = resTypes[0]
-      symbolType = quote do: Symbol[`tokenType`, `nonterminalType`]
+  result.action = genAst(actionTable): actionTable
+  result.action = result.action[1]
+  result.goto   = quote do: `gotoTable`
+  result.stateNum = len(stateItems)
 
-      action       = genSym(nskConst, "action")
-      goto         = genSym(nskConst, "goto" )
-      stack        = genSym(nskVar, "stack")
-      curState     = genSym(nskVar, "state")
-      curToken     = genSym(nskLet, "token")
-      curTokenKind = genSym(nskLet, "tokenKind")
-      curReduceId  = genSym(nskLet, "reduceId")
-      errorId      = genSym(nskForVar, "id")
-      tokenForError = ident"token"
-      errorDotPos   = genSym(nskForVar, "pos")
-      errorDotPosRanged = ident"pos"
-      
-      kindField = ident"kind"  # just too workaround a quote bug
 
-    let nonterminalTypeDef = block:
-      var variants =
-        nnkRecCase.newTree(
-          nnkIdentDefs.newTree(
-            ident"id",
-            infix(newLit(0), "..", newLit(high(nonterminals))),
-            newEmptyNode()
-          ),
-          nnkOfBranch.newTree(newLit(0), newNilLit())
+
+macro makeParser*(head,body: untyped): untyped =
+  
+  func ntFieldIdent(id: int): NimNode = ident("t" & $id)
+
+  let (procIdent, tokenType) = getProcMeta(head)
+
+  let tokenKindType = genSym(nskType, "TokenKind")
+  let getTokenKindType = quote do:
+    type `tokenKindType` = typeof(`tokenType`().kind)
+
+  let
+    nonterminalType = genSym(nskType, "NonTerminal")
+    symbolType = quote do: Symbol[`tokenType`, `nonterminalType`]
+
+  let
+    actionTable  = genSym(nskConst, "actionTable")
+    gotoTable    = genSym(nskConst, "gotoTable"  )
+    stack        = genSym(nskVar, "stack")
+    curState     = genSym(nskVar, "state")
+    curToken     = genSym(nskLet, "token")
+    curTokenKind = genSym(nskLet, "tokenKind")
+    curReduceId  = genSym(nskLet, "reduceId")
+    errorId      = genSym(nskForVar, "id")
+    tokenForError = ident"token"
+    errorDotPos   = genSym(nskForVar, "pos")
+    errorDotPosRanged = ident"pos"
+
+  body.expectKindError(nnkStmtList, "expected list of rules")
+
+  # --- collect nonterminals: ---
+
+  # there is already 1 terminal with no type for S' start symbol
+  var
+    nonterminals:    seq[tuple[name: string, resTypeId: int]] = @[("", 0)]
+    nonterminalInfo: Table[string, tuple[id, resTypeId: int]]
+    resTypes:        seq[NimNode]
+    resTypeNtMap:    seq[seq[int]]  # resType id -> seq[nt ids that have that type]
+
+  for (i, rules) in body.pairs:
+    rules.expectKindError(nnkCall, "expected collection of rules for a nonterminal")
+    rules[0].expectKindError(nnkBracketExpr, "expected nonterminal with type")
+    rules[0][0].expectKindError(nnkIdent, "expected nonterminal name")
+    rules[1].expectKind(nnkStmtList)
+
+    let name = rules[0][0].strVal.nimIdentNormalize
+    let resType = rules[0][1]
+
+    let resTypeId =
+      if (let id = resTypes.find(resType); id) != -1: id
+      else:
+        resTypes &= resType
+        resTypeNtMap &= @[]
+        high(resTypes)
+    assertError(name notin nonterminalInfo, "double definition of nonterminal", resType)  # not really the correct node but close enough
+    nonterminals &= (name, resTypeId)
+    nonterminalInfo[name] = (high(nonterminals), resTypeId)
+    resTypeNtMap[resTypeId] &= high(nonterminals)
+
+  # --- build nonterminals type: ---
+
+  let nonterminalTypeDef = block:
+    var variants =
+      nnkRecCase.newTree(
+        nnkIdentDefs.newTree(
+          ident"id",
+          infix(newLit(0), "..", newLit(high(nonterminals))),
+          newEmptyNode()
+        ),
+        nnkOfBranch.newTree(newLit(0), newNilLit())
+      )
+    for (id, nts) in resTypeNtMap.pairs:
+      var branch = nnkOfBranch.newTree()
+      for nt in nts:
+        branch.add newLit(nt)
+      branch.add:
+        nnkIdentDefs.newTree(
+          ntFieldIdent(id),
+          resTypes[id],
+          newEmptyNode()
         )
-      for (id, nts) in resTypeNtMap.pairs:
-        var branch = nnkOfBranch.newTree()
-        for nt in nts:
-          branch.add newLit(nt)
-        branch.add:
-          nnkIdentDefs.newTree(
-            ident(nonterminalVariantPrefix & $id),
-            resTypes[id],
-            newEmptyNode()
-          )
-        variants.add branch
+      variants.add branch
 
-      nnkObjectTy.newTree(newEmptyNode(), newEmptyNode(), nnkRecList.newTree(variants))
+    nnkObjectTy.newTree(newEmptyNode(), newEmptyNode(), nnkRecList.newTree(variants))
 
-    let gotoTableDef = block:
-      var table = nnkBracket.newTree()
-      for r in gotoTable:
-        var row = nnkBracket.newTree()
-        for v in r: row.add newLit(v)
-        table.add row
-      table
+  # --- parse rules (generate code that builds rules): ---
+  # --- and build reduce case stmt:
+  
+  # this is where da magic happens :)
+  # I need to generate code that will be used to generate a macro.
+  # This macro-ception is needed to unroll for loops (and allow any CT expr, that results in token.kind for terminals) 
+  # TODO: for loop unrolling
 
-    let actionTableDef = block:
-      var table = nnkBracket.newTree()
-      let terminals = genSym(nskVar, "row")
-      for r in actionTable:
-        var rowCollect = newStmtList()
-        var onEof = Action(kind: actionNone)
-        rowCollect.add quote do:
-          var `terminals`: array[`tokenKindType`, Action]
-        for (t, action) in r.pairs:
-          if t == "": onEof = action
-          else:
-            let tokenKind = ident(t)
-            rowCollect.add:
-              genAst(terminals, tokenKind, action):
-                terminals[tokenKind] = action
-        rowCollect.add:
-          genAst(terminals, onEof): (terminals, onEof)
-        table.add quote do:
-          block: `rowCollect`
-      table
+  let blockId = genSym(nskVar, "blockId")
 
-    let reduceCaseStmt = block:
-      var caseStmt = nnkCaseStmt.newTree(curReduceId)
+  var
+    reduceCaseStmt = genSym(nskVar, "reduceCaseStmt")
+    reduceCaseStmtCollect = quote do:
+      var `blockId` = 0
+      var `reduceCaseStmt` = nnkCaseStmt.newTree()
+      `reduceCaseStmt`.add:
+        genAst(): `curReduceId`
+    
+    errorBlocks: seq[NimNode]
 
-      for (lhsm1, rules) in ruleSets[1..^1].pairs:
-        for (rhsId, rhs) in rules.pairs:
-          var branch = nnkOfBranch.newTree(newLit(rhs.reduceId))
+  let ruleDefs   = genSym(nskVar, "ruleDefs")
+  var ruleDefsCollect = quote do:
+    var `blockId` = 0
+    var `ruleDefs` = @[@[MRuleRhs[`tokenKindType`](pattern: @[newNonTerminal(`tokenKindType`, 1)], blockId: -1)]]
 
-          let lhs = lhsm1 + 1
-          let patternLen = len(rhs.pattern)
+  for (i, rules) in body.pairs:
+    let ntId = i+1
 
-          var branchBody = newStmtList: quote do:
-            assert len(`stack`) >= `patternLen`
-
-          var matchedRuleTupleDef = nnkTupleConstr.newTree()
-
-          for (i, symbol) in rhs.pattern.pairs:
-            let elem = genSym(nskLet, "elem")
-            let revIndex = patternLen-i
-
-            branchBody.add quote do:
-              let (`elem`, _) = `stack`[^`revIndex`]
-
-            case symbol.kind
-            of mSymTerminal:
-              let terminal = ident(symbol.name)
-              branchBody.add quote do:
-                assert `elem`.kind == symTerminal
-                assert `elem`.token.kind == `terminal`
-              matchedRuleTupleDef.add quote do:
-                `elem`.token
-
-            of mSymNonTerminal:
-              let ntId = symbol.id
-              let field = ident(nonterminalVariantPrefix & $nonterminals[ntId].resTypeId)
-              branchBody.add quote do:
-                assert `elem`.kind == symNonTerminal
-                assert `elem`.nt.id == `ntId`
-              matchedRuleTupleDef.add quote do:
-                `elem`.nt.`field`
-
-          let field  = ident(nonterminalVariantPrefix & $nonterminals[lhs].resTypeId)
-          let action = body[lhsm1][1][rhsId][0][1]
-          action.expectKind(nnkStmtList)
-          branchBody.add: quote do:
-            let `matchedRuleTuple` = `matchedRuleTupleDef`
-            `stack`.setLen(len(`stack`) - `patternLen`)
-            let originState =
-              if len(`stack`) > 0: `stack`[^1].state
-              else: 0
-            `curState` = `goto`[originState][`lhs`]
-            assert `curState` >= 0
-            `stack` &= (
-              `symbolType`(
-                kind: symNonTerminal,
-                nt: `nonterminalType`(
-                  id: `lhs`,
-                  `field`: block: `action`
-                )
-              ),
-              `curState`
-            )
-
-          branch.add branchBody
-          caseStmt.add branch
-
-      caseStmt.add nnkElse.newTree(
-        quote do: assert false
-      )
-
-      caseStmt
-
-    # saves rule setup of what might be reduced in the future for error handling
-    var patternLens: seq[int]
-    let stateErrorDataDef = block:
-      var lookup = nnkBracket.newTree()
-      for items in stateItems:
-        var data: seq[tuple[id,pos: int]]
-        for item in items:
-          let rhs = ruleSets[item.ruleIdDot.id]
-          patternLens &= len(rhs.pattern)
-          let id = rhs.reduceId
-          if id >= 0 and errorHandlers[id].kind != nnkEmpty:
-            data &= (id, item.ruleIdDot.dotPos)
-        lookup.add:
-          genAst(data): data
-      lookup
-
-    let errorHandlingCaseStmt = block:
-      var caseStmt = nnkCaseStmt.newTree(errorId)
-      for (i, body) in errorHandlers.pairs:
-        if body.kind != nnkEmpty:
-          let l = patternLens[i]
-          caseStmt.add nnkOfBranch.newTree(
-            newLit(i),
-            quote do:
-              let `errorDotPosRanged` = range[0 .. `l`](`errorDotPos`)
-              `body`
-          )
-      caseStmt.add nnkElse.newTree(
-        quote do: discard
-      )
-      caseStmt
-
-
+    let rhsDefs = genSym(nskVar, "rhsDefs" )
+    ruleDefsCollect.add quote do:
+      var `rhsDefs`: seq[MRuleRhs[`tokenKindType`]]
+    
     let
-      resTypeField = ident(nonterminalVariantPrefix & $0)
-      stateNum = newLit(len(stateItems))
-      ntNum = newLit(len(nonterminals))
+      reduceResTypeId = nonterminals[ntId].resTypeId
+      reduceResType = resTypes[reduceResTypeId]
 
-    quote do:
-      proc `procIdent`(code: string, lexProc: LexerProc[`tokenType`]): `procResType` =
+    proc genAddRule(rule: NimNode, captures: seq[NimNode] = @[]): tuple[rule,reduce: NimNode] =
 
-        type `nonterminalType` = `nonterminalTypeDef`
+      rule.expectKindError(nnkIfStmt, "expected if statement")
+      rule[0].expectKind(nnkElifBranch)
 
-        `getTokenKindType`
+      var ruleDefsCollect = newStmtList()
 
+      let patternDef = genSym(nskVar, "patternDef")
+      ruleDefsCollect.add quote do:
+        var `patternDef`: seq[MSymbol[`tokenKindType`]] = @[]
+
+      errorBlocks.add:
+        case len(rule)
+        of 1: newEmptyNode()
+        of 2:
+          rule[1].expectKindError(nnkElse, "unexpected elif")
+          rule[1][0]
+        else:
+          error "unexpected elifs", rule
+          newEmptyNode()
+
+      let reduceBody = rule[0][1]
+      var reducePatternVar = nnkTupleConstr.newTree()
+
+      proc parseSymbol(l: int, sym: NimNode) =
+        let revIndex = l - len(reducePatternVar)
+        if sym.kind in {nnkIdent, nnkSym} and
+           (let symName = sym.strVal.nimIdentNormalize;
+            symName in nonterminalInfo):
+          let (ntId, resTypeId) = nonterminalInfo[symName]
+          let field = ntFieldIdent(resTypeId)
+          reducePatternVar.add quote do: `stack`[^`revIndex`][0].nt.`field`
+          ruleDefsCollect.add quote do:
+            `patternDef` &= newNonTerminal(`tokenKindType`, `ntId`)
+
+        else:
+          reducePatternVar.add quote do: `stack`[^`revIndex`][0].token
+          ruleDefsCollect.add quote do:
+            `patternDef` &= newTerminal(`sym`)
+
+      let pattern = rule[0][0]
+      case pattern.kind
+      of nnkTupleConstr:
+        for sym in pattern: parseSymbol(len(pattern), sym)
+      of nnkPar:
+        parseSymbol(1, pattern[0])
+      else:
+        parseSymbol(1, pattern)
+
+      let field = ntFieldIdent(nonterminals[ntId].resTypeId)
+      let patternLen = len(reducePatternVar)
+      let s = ident"s"
+      var genAstCall = quote do: genAst(`s` = ident"s")
+      for c in captures: genAstCall.add c
+      genAstCall.add quote do:
+        let `s` = `reducePatternVar`
+        `stack`.setLen(len(`stack`) - `patternLen`)
+        let originState =
+          if len(`stack`) > 0: `stack`[^1].state
+          else: 0
+        `curState` = `gotoTable`[originState][`ntId`]
+        assert `curState` >= 0
+        `stack` &= (
+          `symbolType`(
+            kind: symNonTerminal,
+            nt: `nonterminalType`(
+              id: `ntId`,
+              `field`: block: `reduceBody`
+            )
+          ),
+          `curState`
+        )
+      result.reduce = quote do:
+        `reduceCaseStmt`.add nnkOfBranch.newTree(
+          newLit(`blockId`),
+          `genAstCall`
+        )
+        inc `blockId`
+
+      ruleDefsCollect.add quote do:
+        `rhsDefs` &= MRuleRhs[`tokenKindType`](pattern: `patternDef`, blockId: `blockId`)
+        inc `blockId`
+      result.rule = ruleDefsCollect
+
+    for rule in rules[1]:
+      if rule.kind == nnkForStmt:
+        let parts = forLoopParts(rule)
+        parts.body.expectKind(nnkStmtList)
+        var loopBodyRule   = newStmtList()
+        var loopBodyReduce = newStmtList()
+        for rule in parts.body:
+          let addNode = genAddRule(rule, parts.idents)
+          loopBodyRule.add   addNode.rule
+          loopBodyReduce.add addNode.reduce
+        var forLoopRule   = nnkForStmt.newTree()
+        var forLoopReduce = nnkForStmt.newTree()
+        for elem in parts.elems:
+          forLoopRule.add   elem
+          forLoopReduce.add elem
+        forLoopRule.add   parts.vals, loopBodyRule
+        forLoopReduce.add parts.vals, loopBodyReduce
+        ruleDefsCollect.add       forLoopRule
+        reduceCaseStmtCollect.add forLoopReduce
+
+      else:
+        let addNode = genAddRule(rule)
+        ruleDefsCollect.add       addNode.rule
+        reduceCaseStmtCollect.add addNode.reduce
+
+    ruleDefsCollect.add quote do:
+      `ruleDefs` &= `rhsDefs`
+
+  reduceCaseStmtCollect.add quote do:
+    `reduceCaseStmt`.add nnkElse.newTree(newStmtList(
+      quote do: assert false
+    ))
+
+  debugEcho reduceCaseStmtCollect.repr
+
+  # --- build parser: ---
+
+  let
+    procResType = resTypes[nonterminals[1].resTypeId]
+    resTypeField = ntFieldIdent(nonterminals[1].resTypeId)
+
+  let ntNum = len(nonterminals)
+  result = quote do:
+
+    `getTokenKindType`
+    type `nonterminalType` = `nonterminalTypeDef`
+    
+    macro getParsingTables(actionTable, gotoTable: untyped): untyped =
+      `ruleDefsCollect`
+      let (action, goto, stateNum) = makeParsingTables(`ruleDefs`, `ntNum`)
+      genAst(action, goto, stateNum, actionTable, gotoTable):
         const
-          `goto`   : GotoTable[`stateNum`, `ntNum`]  = `gotoTableDef`
-          `action` : ActionTable[`stateNum`, `tokenKindType`] = `actionTableDef`
+          actionTable: ActionTable[stateNum, `tokenKindType`] = action
+          gotoTable:   GotoTable[stateNum, `ntNum`]           = goto
 
-          stateErrorData : array[`stateNum`, seq[tuple[id,pos: int]]] = `stateErrorDataDef`
+    getParsingTables(`actionTable`, `gotoTable`)
 
-        var
-          `stack`: seq[tuple[s: `symbolType`, state: int]]
-          `curState` = 0
-          pos = 0
+    #const stateErrorData : array[`stateNum`, seq[tuple[id,pos: int]]] = `stateErrorDataDef`
 
-          lexerState = initLexerState()
+    proc `procIdent`(code: string, lexProc: LexerProc[`tokenType`]): `procResType` =
+
+      var
+        `stack`: seq[tuple[s: `symbolType`, state: int]]
+        `curState` = 0
+        pos = 0
+
+        lexerState = initLexerState()
+        token = lexProc(code, lexerState)
+
+      while true:
+
+        let actionRow = `actionTable`[`curState`]
+        let action =
+          if token.isSome: actionRow.terminals[token.unsafeGet.kind]
+          else: actionRow.eof
+
+        case action.kind
+        of actionShift:
+          `curState` = action.goto
+          `stack` &= (
+            `symbolType`(kind: symTerminal, token: token.get),
+            `curState`
+          )
           token = lexProc(code, lexerState)
 
-        while true:
-
-          let actionRow = `action`[`curState`]
-          let action =
-            if token.isSome: actionRow.terminals[token.unsafeGet.kind]
-            else: actionRow.eof
-
-          case action.kind
-          of actionShift:
-            `curState` = action.goto
-            `stack` &= (
-              `symbolType`(kind: symTerminal, token: token.get),
-              `curState`
-            )
-            token = lexProc(code, lexerState)
-
-          of actionReduce:
-            let `curReduceId` = action.id
-            {.hint[XDeclaredButNotUsed]:off.}
+        of actionReduce:
+          let `curReduceId` = action.id
+          macro getReduceCaseStmt: untyped =
+            `reduceCaseStmtCollect`
             `reduceCaseStmt`
-            {.hint[XDeclaredButNotUsed]:on.}
+          getReduceCaseStmt()
 
-          of actionAccept:
-            assert len(`stack`) == 1
-            return `stack`[0].s.nt.`resTypeField`
+        of actionAccept:
+          assert len(`stack`) == 1
+          return `stack`[0].s.nt.`resTypeField`
 
-          of actionNone:
-            let `tokenForError` = token
-            {.warning[UnreachableCode]:off.}
-            for (`errorId`, `errorDotPos`) in stateErrorData[`curState`]:
-              `errorHandlingCaseStmt`
-            raise ParsingError(msg: "parsing failed")
-            {.warning[UnreachableCode]:on.}
+        of actionNone:
+          raise ParsingError(msg: "parsing failed")
+
+          #[let `tokenForError` = token
+          {.warning[UnreachableCode]:off.}
+          for (`errorId`, `errorDotPos`) in stateErrorData[`curState`]:
+            `errorHandlingCaseStmt`
+          raise ParsingError(msg: "parsing failed")
+          {.warning[UnreachableCode]:on.}]#
+
+  #debugEcho result.repr

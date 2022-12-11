@@ -30,7 +30,24 @@ func getProcMeta*(head: NimNode): tuple[ident, typ: NimNode] =
     error "expected name of proc and type of tokens", head
 
 
+proc forLoopParts*(node: NimNode): tuple[elems,idents: seq[NimNode], vals,body: NimNode] =
+  node.expectKind(nnkForStmt)
+  result.elems = node[0..^3]
+  result.vals  = node[^2]
+  result.body  = node[^1]
+  for elem in result.elems:
+    if elem.kind == nnkVarTuple:
+      for i in elem:
+        if i.kind != nnkEmpty:
+          i.expectKind(nnkIdent)
+          result.idents &= i
+    else:
+      elem.expectKind(nnkIdent)
+      result.idents &= elem
+
+
 proc addNewOrAppend*[K,V](table: var Table[K, seq[V]], key: K, val: V) =
+  mixin `==`
   if key in table:
     table[key] &= val
   else:

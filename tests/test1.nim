@@ -8,7 +8,7 @@ import parlexgen/common
 
 test "test":
   type
-    Op = enum opMul="*", opAdd="+"
+    Op = enum opMul="*", opAdd="+", opSub="-"
     ExpKind = enum ekNum, ekVar, ekOp
     Exp = ref object
       case kind: ExpKind
@@ -27,7 +27,7 @@ test "test":
       of stmntOutput:
         outVar: string
 
-    TokenKind = enum NUM, IDENT, OUT="out", PLUS="+", ASTERIX="*", LPAR="(", RPAR=")", SEMI=";", ASSIGN="="
+    TokenKind = enum NUM, IDENT, OUT="out", PLUS="+", MINUS="-", ASTERIX="*", LPAR="(", RPAR=")", SEMI=";", ASSIGN="="
     Token = object
       case kind: TokenKind
       of NUM: val: int
@@ -92,8 +92,11 @@ test "test":
       if add: s[0]
 
     add[Exp]:
-      if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s[0], right: s[2])
-      else: echo 7
+      for (t, o) in [(PLUS, opAdd), (MINUS, opSub)]:
+        if (add, t, val): Exp(kind: ekOp, op: o, left: s[0], right: s[2])
+        else: echo 7
+      #if (add, PLUS, val): Exp(kind: ekOp, op: opAdd, left: s[0], right: s[2])
+      #else: echo 7
 
       if val: s[0]
       else: echo 8
