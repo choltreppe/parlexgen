@@ -115,14 +115,20 @@ proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: Nim
     result = genMatcher(o, s, pos, sections, doStepEnd)
   else:
     # use 'lexe.exe' helper program in order to speedup lexer generation
-    discard staticExec("nim c lexe.nim", cache="lexe") # compile lexe (if not already)
 
     var res: seq[string] = @[]
     for (pattern, body) in sections:
       res.add pattern
 
     let data = $$res
-    let o = to[DFA](staticExec(/."lexe", input=data&"\n", cache=data))
+
+    let o = to[DFA]:
+      let (output, code) = gorgeEx(/."lexe", input=data&"\n", cache=data)
+      if code == 0: output
+      else:
+        discard staticExec("nim c lexe.nim")
+        staticExec(/."lexe", input=data&"\n", cache=data)
+
     result = genMatcher(o, s, pos, sections, doStepEnd)
   #echo repr result
 
