@@ -7,7 +7,7 @@ import ./private/lexim/lexim
 
 type
   LexingError* = ref object of CatchableError
-    pos*: int
+    pos*, line*, col*: int
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
@@ -98,7 +98,7 @@ macro makeLexer*(head,body: untyped): untyped =
             result = leximMatch(c, quote do: `state`.pos, `rules`, doEnd)
 
           impl(`code`)
-          raise LexingError(pos: `oldPos`, msg: "lexing failed")
+          raise LexingError(pos: `oldPos`, line: `line`, col: `col`, msg: "lexing failed")
       return none(`tokenType`)
 
   #debugEcho result.repr

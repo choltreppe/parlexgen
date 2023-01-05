@@ -114,8 +114,8 @@ macro makeParser*(head,body: untyped): untyped =
 
   var
     ruleSets: seq[MRules]  # lhs (nont. id) -> seq[rhs] (options)
-    reduceNimNode: seq[NimNode]  # only for errors
-    errorHandlers: seq[NimNode]
+    reduceNimNode: seq[NimNode]  # only for compilation errors
+    errorHandlers: seq[tuple[patternLen: int, code: NimNode]]
 
   # start rule: S' -> S
   ruleSets &= @[MRuleRhs(pattern: @[newNonTerminal(1)], reduceId: -1)]
@@ -126,21 +126,6 @@ macro makeParser*(head,body: untyped): untyped =
     
     ruleSets &= @[]
     for rule in rules[1]:
-
-      rule.expectKindError(nnkIfStmt, "expected if statement")
-      rule[0].expectKind(nnkElifBranch)
-
-      errorHandlers.add:
-        case len(rule)
-        of 1: newEmptyNode()
-        of 2:
-          rule[1].expectKindError(nnkElse, "unexpected elif")
-          rule[1][0]
-        else:
-          error "unexpected elifs", rule
-          newEmptyNode()
-
-      reduceNimNode &= rule[0]
 
       ruleSets[^1] &= MRuleRhs(reduceId: curReduceId)
       inc curReduceId
@@ -166,6 +151,23 @@ macro makeParser*(head,body: untyped): untyped =
         parseSymbol(0, pattern[0], single = true)
       else:
         parseSymbol(0, pattern, single = true)
+
+      rule.expectKindError(nnkIfStmt, "expected if statement")
+      rule[0].expectKind(nnkElifBranch)
+
+      errorHandlers.add (
+        len(ruleSets[^1][^1].pattern),
+        case len(rule)
+        of 1: newEmptyNode()
+        of 2:
+          rule[1].expectKindError(nnkElse, "unexpected elif")
+          rule[1][0]
+        else:
+          error "unexpected elifs", rule
+          newEmptyNode()
+      )
+
+      reduceNimNode &= rule[0]
 
   # assert all nts just have one ruleset
   assert len(nonterminals) == len(ruleSets)
@@ -511,16 +513,14 @@ macro makeParser*(head,body: untyped): untyped =
       caseStmt
 
     # saves rule setup of what might be reduced in the future for error handling
-    var patternLens: seq[int]
     let stateErrorDataDef = block:
       var lookup = nnkBracket.newTree()
       for items in stateItems:
         var data: seq[tuple[id,pos: int]]
         for item in items:
           let rhs = ruleSets[item.ruleIdDot.id]
-          patternLens &= len(rhs.pattern)
           let id = rhs.reduceId
-          if id >= 0 and errorHandlers[id].kind != nnkEmpty:
+          if id >= 0 and errorHandlers[id].code.kind != nnkEmpty:
             data &= (id, item.ruleIdDot.dotPos)
         lookup.add:
           genAst(data): data
@@ -528,9 +528,8 @@ macro makeParser*(head,body: untyped): untyped =
 
     let errorHandlingCaseStmt = block:
       var caseStmt = nnkCaseStmt.newTree(errorId)
-      for (i, body) in errorHandlers.pairs:
+      for i, (l, body) in errorHandlers:
         if body.kind != nnkEmpty:
-          let l = patternLens[i]
           caseStmt.add nnkOfBranch.newTree(
             newLit(i),
             quote do:
@@ -540,6 +539,7 @@ macro makeParser*(head,body: untyped): untyped =
       caseStmt.add nnkElse.newTree(
         quote do: discard
       )
+
       caseStmt
 
 
