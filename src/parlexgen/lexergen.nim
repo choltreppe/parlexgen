@@ -7,7 +7,7 @@ import ./private/lexim/lexim
 
 type
   LexingError* = ref object of CatchableError
-    pos*, line*, col*: int
+    pos*: int
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
@@ -24,7 +24,7 @@ macro makeLexer*(head,body: untyped): untyped =
     rules  = genSym(nskVar, "rules")
     matchingBlock = genSym(nskLabel, "matching")
 
-  proc genAddRule(rule: NimNode, captures: varargs[NimNode]): NimNode =
+  proc genAddRule(rule: NimNode, captures: seq[NimNode] = @[]): NimNode =
     rule.expectKindError({nnkCall, nnkCommand}, "expected pattern with token generation code")
     # TODO: verify rule[0] is string (not neccesary literal)
     let pattern = rule[0]
@@ -58,18 +58,19 @@ macro makeLexer*(head,body: untyped): untyped =
     # -- loops of rules: --
 
     if rule.kind == nnkForStmt:
-      let
-        elem = rule[0]
-        vals = rule[1]
-        body = rule[2]
+      let parts = forLoopParts(rule)
 
-      body.expectKind(nnkStmtList)
+      parts.body.expectKind(nnkStmtList)
 
       var loopBody = newStmtList()
-      for rule in body:
-        loopBody.add genAddRule(rule, elem)
+      for rule in parts.body:
+        loopBody.add genAddRule(rule, parts.idents)
 
-      rulesSeqDef.add nnkForStmt.newTree(elem, vals, loopBody)
+      var forLoop = nnkForStmt.newTree()
+      for elem in parts.elems: forLoop.add elem
+      forLoop.add parts.vals, loopBody
+
+      rulesSeqDef.add forLoop
 
       continue
 
@@ -98,7 +99,7 @@ macro makeLexer*(head,body: untyped): untyped =
             result = leximMatch(c, quote do: `state`.pos, `rules`, doEnd)
 
           impl(`code`)
-          raise LexingError(pos: `oldPos`, line: `line`, col: `col`, msg: "lexing failed")
+          raise LexingError(pos: `oldPos`, msg: "lexing failed")
       return none(`tokenType`)
 
   #debugEcho result.repr
