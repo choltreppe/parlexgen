@@ -186,6 +186,7 @@ macro makeParser*(head,body: untyped): untyped =
   # --- generate parsing table: ---
 
   func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
+    let rules = rules
     var visited: HashSet[int]
     proc findRec(symbol: MSymbol): HashSet[MTerminal] =
       case symbol.kind
@@ -209,13 +210,14 @@ macro makeParser*(head,body: untyped): untyped =
     ruleIdDot.dotPos == len(rules[ruleIdDot.id].pattern)
 
   var
-    adjacencyMat: seq[seq[Option[MSymbol]]]
+    #adjacencyMat: seq[seq[Option[MSymbol]]]
     stateItems: seq[seq[MItem]]
     stateLookup: Table[seq[MRuleIdDotted], int]
 
   # returns state id
   # items are just the initial ones with no closure
-  proc buildStateMashine(items: seq[MItem]): int =
+  proc buildStateMashine(items: seq[MItem], adjacencyMat = newSeq[seq[Option[MSymbol]]]()): (int, seq[seq[Option[MSymbol]]]) =
+    var adjacencyMat = adjacencyMat
 
     proc findTransitions(currentState: int, items: seq[MItem]) =
       var
@@ -261,7 +263,9 @@ macro makeParser*(head,body: untyped): untyped =
             ruleIdDot: (id: it.id, dotPos: it.dotPos + 1),
             lookahead: lookaheadTable[it]
           ))
-        adjacencyMat[currentState][buildStateMashine(newItems)] = some(symbol)
+        let (toState, newAdjacencyMat) = buildStateMashine(newItems, adjacencyMat)
+        adjacencyMat = newAdjacencyMat
+        adjacencyMat[currentState][toState] = some(symbol)
 
     let rulesIdDot = items.mapIt(it.ruleIdDot)
 
@@ -282,7 +286,7 @@ macro makeParser*(head,body: untyped): untyped =
       if newLookahead:
         findTransitions(oldState, items)
 
-      oldState
+      (oldState, adjacencyMat)
 
     # case: no similar state exists:
     else:
@@ -297,9 +301,9 @@ macro makeParser*(head,body: untyped): untyped =
       # find transitions:
       findTransitions(currentState, items)
 
-      currentState
+      (currentState, adjacencyMat)
 
-  discard buildStateMashine(@[MItem(ruleIdDot: ((0, 0), 0), lookahead: toHashSet([""]))])
+  let (_, adjacencyMat) = buildStateMashine(@[MItem(ruleIdDot: ((0, 0), 0), lookahead: toHashSet([""]))])
 
   # - build parsing table: -
 
