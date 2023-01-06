@@ -1,7 +1,7 @@
 import unittest
 import parlexgen
 
-import std/[strutils, strformat, sequtils, options, macros]
+import std/[strutils, strformat, sequtils, options]
 import fusion/matching
 
 import parlexgen/common

@@ -7,7 +7,7 @@ import ./private/lexim/lexim
 
 type
   LexingError* = ref object of CatchableError
-    pos*: int
+    pos*, line*, col*: int
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
@@ -84,22 +84,22 @@ macro makeLexer*(head,body: untyped): untyped =
         let `line`   = `state`.line
         let `col`    = `state`.col
         block `matchingBlock`:
-          macro impl(c: untyped) =
+          macro impl(c, pos, doEnd: untyped) =
             `rulesSeqDef`
-            let doEnd = quote do:
-              if `state`.pos < len(`code`):
-                case `code`[`state`.pos]:
-                of '\n':
-                  inc `state`.line
-                  `state`.col = 0
-                of '\r':
-                  `state`.col = 0
-                else:
-                  inc `state`.col
-            result = leximMatch(c, quote do: `state`.pos, `rules`, doEnd)
+            result = leximMatch(c, pos, `rules`, doEnd)
 
-          impl(`code`)
-          raise LexingError(pos: `oldPos`, msg: "lexing failed")
+          impl(`code`, `state`.pos):
+            if `state`.pos < len(`code`):
+              case `code`[`state`.pos]:
+              of '\n':
+                inc `state`.line
+                `state`.col = 0
+              of '\r':
+                `state`.col = 0
+              else:
+                inc `state`.col
+
+          raise LexingError(pos: `oldPos`, line: `line`, col: `col`, msg: "lexing failed")
       return none(`tokenType`)
 
   #debugEcho result.repr
