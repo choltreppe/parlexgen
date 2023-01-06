@@ -3,8 +3,6 @@ With focus on easy to use custom error handling.<br>
 
 The lexer is build on top of [lexim](https://github.com/Araq/lexim)
 
-**This is still in developement and not ready for production**
-
 Here is an example with detailed explanation:<br>
 (the type definition are omitted. take a look at tests/test1.nim for the whole code)
 ```nim
