@@ -226,31 +226,32 @@ macro makeParser*(head,body: untyped): untyped =
 
       proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead) =
         if ruleIdDot in lookaheadTable:
+          if lookahead < lookaheadTable[ruleIdDot]: return
           lookaheadTable[ruleIdDot].incl lookahead
-
         else:
-          assert not isRuleEnd(ruleIdDot)
           lookaheadTable[ruleIdDot] = lookahead
-          let pattern = rules[ruleIdDot.id].pattern
-          let symbol = pattern[ruleIdDot.dotPos]
-          if symbol in transitions:
-            transitions[symbol] &= ruleIdDot
-          else:
-            transitions[symbol] = @[ruleIdDot]
-          if symbol.kind == mSymNonTerminal:
-            let nextLookahead =
-              if ruleIdDot.dotPos == high(pattern):
-                lookahead
-              else:
-                let nextSymbol = pattern[ruleIdDot.dotPos + 1]
-                case nextSymbol.kind
-                of mSymTerminal:    toHashSet([nextSymbol.name])
-                of mSymNonTerminal: firstSets[nextSymbol.id]
-            for i in 0 .. high(rules[symbol.id]):
-              closure(
-                (id: (symbol.id, i), dotPos: 0),
-                nextLookahead
-              )
+
+        assert not isRuleEnd(ruleIdDot)
+        let pattern = rules[ruleIdDot.id].pattern
+        let symbol = pattern[ruleIdDot.dotPos]
+        if symbol in transitions:
+          transitions[symbol] &= ruleIdDot
+        else:
+          transitions[symbol] = @[ruleIdDot]
+        if symbol.kind == mSymNonTerminal:
+          let nextLookahead =
+            if ruleIdDot.dotPos == high(pattern):
+              lookahead
+            else:
+              let nextSymbol = pattern[ruleIdDot.dotPos + 1]
+              case nextSymbol.kind
+              of mSymTerminal:    toHashSet([nextSymbol.name])
+              of mSymNonTerminal: firstSets[nextSymbol.id]
+          for i in 0 .. high(rules[symbol.id]):
+            closure(
+              (id: (symbol.id, i), dotPos: 0),
+              nextLookahead
+            )
 
       for item in items:
         if not isRuleEnd(item.ruleIdDot):
@@ -335,14 +336,16 @@ macro makeParser*(head,body: untyped): untyped =
             if terminal notin actionTable[fromState]:
               actionTable[fromState][terminal] = action
 
-            # conflict:
+            # possible conflict:
             else:
               let curAction = actionTable[fromState][terminal]
-              assert curAction.kind == actionAccept
-              error(
-                "reduce/reduce conflict with " & lineInfoShort(patternNimNode[curAction.id]),
-                patternNimNode[patternId]
-              )
+              # conflict:
+              if curAction.kind != actionReduce or curAction.id != action.id:
+                assert curAction.kind == actionAccept
+                error(
+                  "reduce/reduce conflict with " & lineInfoShort(patternNimNode[curAction.id]),
+                  patternNimNode[patternId]
+                )
 
     for (toState, symbol) in row.pairs:
       if Some(@symbol) ?= symbol:
@@ -350,35 +353,38 @@ macro makeParser*(head,body: untyped): untyped =
 
         # shift:
         of mSymTerminal:
+          let action = Action(kind: actionShift, goto: toState)
           if symbol.name notin actionTable[fromState]:
-            actionTable[fromState][symbol.name] = Action(kind: actionShift, goto: toState)
+            actionTable[fromState][symbol.name] = action
 
-          # conflict:
+          # possible conflict:
           else:
             let curAction = actionTable[fromState][symbol.name]
-            var shiftRuleNodes: seq[NimNode]
-            proc findShiftRules(state: int) =
-              for item in stateItems[state]:
-                if not isRuleEnd(item.ruleIdDot):
-                  shiftRuleNodes &= ruleNimNode(item.ruleIdDot.id)
-            findShiftRules(toState)
-            case curAction.kind
-            of actionReduce:
-              error(
-                "shift/reduce conflict with:" &
-                "  shifts: " & shiftRuleNodes[1..^1].map(lineInfoShort).join(", ") &
-                "  reduce: " & lineInfoShort(patternNimNode[curAction.id]),
-                shiftRuleNodes[0]
-              )
-            of actionShift:
-              findShiftRules(curAction.goto)
-              error(
-                "shift/shift conflict with: " &
-                shiftRuleNodes[1..^1].map(lineInfoShort).join(", "),
-                shiftRuleNodes[0]
-              )
-            else:
-              assert false
+            # conflict:
+            if curAction.kind != actionShift or curAction.goto != action.goto:
+              var shiftRuleNodes: seq[NimNode]
+              proc findShiftRules(state: int) =
+                for item in stateItems[state]:
+                  if not isRuleEnd(item.ruleIdDot):
+                    shiftRuleNodes &= ruleNimNode(item.ruleIdDot.id)
+              findShiftRules(toState)
+              case curAction.kind
+              of actionReduce:
+                error(
+                  "shift/reduce conflict with:" &
+                  "  shifts: " & shiftRuleNodes[1..^1].map(lineInfoShort).join(", ") &
+                  "  reduce: " & lineInfoShort(patternNimNode[curAction.id]),
+                  shiftRuleNodes[0]
+                )
+              of actionShift:
+                findShiftRules(curAction.goto)
+                error(
+                  "shift/shift conflict with: " &
+                  shiftRuleNodes[1..^1].map(lineInfoShort).join(", "),
+                  shiftRuleNodes[0]
+                )
+              else:
+                assert false
 
         # goto:
         of mSymNonTerminal:
@@ -599,7 +605,7 @@ macro makeParser*(head,body: untyped): untyped =
 
           let actionRow = `action`[`curState`]
           let action =
-            if token.isSome: actionRow.terminals[token.unsafeGet.kind]
+            if options.isSome(token): actionRow.terminals[options.unsafeGet(token).kind]
             else: actionRow.eof
 
           case action.kind
