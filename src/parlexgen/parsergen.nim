@@ -183,7 +183,7 @@ macro makeParser*(head,body: untyped): untyped =
   # assert all nts just have one ruleset
   assert len(nonterminals) == len(rules)
 
-  # --- generate parsing table: ---
+  # --- find first-sets: ---
 
   func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
     let rules = rules
@@ -226,7 +226,7 @@ macro makeParser*(head,body: untyped): untyped =
 
       proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead) =
         if ruleIdDot in lookaheadTable:
-          if lookahead < lookaheadTable[ruleIdDot]: return
+          if lookahead <= lookaheadTable[ruleIdDot]: return
           lookaheadTable[ruleIdDot].incl lookahead
         else:
           lookaheadTable[ruleIdDot] = lookahead
