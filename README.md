@@ -19,7 +19,7 @@ makeLexer lex[Token]:
   #  match: the matched string
   #  pos: the index of the start of the match inside the input string
   #  line, col
-  ($OUT): Token(kind: OUT, line: line, col: col)
+  "out": Token(kind: OUT, line: line, col: col)
   # as you can see, you may can use any const expr for the pattern
 
   r"[0-9]+":
