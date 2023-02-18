@@ -44,3 +44,6 @@ proc forLoopParts*(node: NimNode): tuple[elems,idents: seq[NimNode], vals,body: 
     else:
       elem.expectKind(nnkIdent)
       result.idents &= elem
+
+template `/.`*(x: string): string =
+  (when defined(posix): "./" & x else: x)

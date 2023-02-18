@@ -1,70 +1,12 @@
 import fusion/matching
 import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm]
+import jsony
 
 import ./private/utils, ./common
+import ./private/parsergen/types
 
-# runtime
-type
-  SymbolKind = enum symTerminal, symNonTerminal
-  Symbol[T, N] = object
-    case kind: SymbolKind
-    of symTerminal: token: T
-    of symNonTerminal: nt: N
 
-  ActionKind = enum actionNone, actionShift, actionReduce, actionAccept
-  Action = object
-    case kind: ActionKind
-    of actionShift:  goto: int
-    of actionReduce: id:   int
-    else: discard
-  ActionTable[L: static int, T: enum] = array[L, tuple[terminals: array[T, Action], eof: Action]]
-
-  GotoTable[L, N: static int] = array[L, array[N, int]]
-
-  ParsingError* = ref object of CatchableError
-
-func `$`*(symbol: Symbol): string =
-  case symbol.kind
-  of symTerminal: $symbol.token.kind
-  of symNonTerminal: $symbol.nt
-
-# meta
-type
-  MTerminal = string  # token kind  (empty string means $)
-  MNonTerminal = int  # id
-  MSymbolKind = enum mSymTerminal, mSymNonTerminal
-  MSymbol = object
-    case kind: MSymbolKind
-    of mSymTerminal:    name: MTerminal
-    of mSymNonTerminal: id:   MNonTerminal
-  MRuleRhs = object
-    pattern: seq[MSymbol]
-    patternId: int
-  MRules = seq[MRuleRhs]
-
-  MRuleId = tuple[rule,rhs: int]
-  MRuleIdDotted = tuple
-    id: MRuleId
-    dotPos: int
-  MLookahead = HashSet[MTerminal]
-  MItem = object
-    ruleIdDot: MRuleIdDotted
-    lookahead: MLookahead
-
-func `==`(a, b: MSymbol): bool =
-  if a.kind == b.kind:
-    case a.kind
-    of mSymTerminal:    a.name == b.name
-    of mSymNonTerminal: a.id   == b.id  
-  else: false
-
-func newTerminal(name: string): MSymbol = MSymbol(kind: mSymTerminal,    name: name)
-func newNonTerminal(id: int):   MSymbol = MSymbol(kind: mSymNonTerminal, id:   id  )
-
-func `[]`(rules: seq[MRules], id: MRuleId): MRuleRhs =
-  rules[id.rule][id.rhs]
-
-func `<`(a,b: MItem): bool = a.ruleIdDot < b.ruleIdDot
+type ParsingError* = ref object of CatchableError
 
 
 macro makeParser*(head,body: untyped): untyped =
@@ -115,7 +57,7 @@ macro makeParser*(head,body: untyped): untyped =
   var
     rules: seq[MRules]  # lhs (nont. id) -> seq[rhs] (options)
     actionBodys: seq[NimNode]
-    patternNimNode: seq[NimNode]  # only for compilation errors
+    patternLineInfo: seq[LineInfo]  # only for compilation errors
     patternLens: seq[int]  # reduceId -> pattern len
     errorHandlers: seq[tuple[code: NimNode, patternIds: seq[int]]]
 
@@ -178,218 +120,27 @@ macro makeParser*(head,body: untyped): untyped =
       else:
         rules[^1] &= parseRhs(rhsDef)
 
-      patternNimNode &= rhsDef[0]
+      patternLineInfo &= rhsDef[0].lineInfoObj
 
   # assert all nts just have one ruleset
   assert len(nonterminals) == len(rules)
 
-  # --- find first-sets: ---
+  # --- build parsing table: ---
 
-  func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
-    let rules = rules
-    var visited: HashSet[int]
-    proc findRec(symbol: MSymbol): HashSet[MTerminal] =
-      case symbol.kind
-      of mSymTerminal:
-        result.incl symbol.name.nimIdentNormalize
-      of mSymNonTerminal:
-        if symbol.id notin visited:
-          visited.incl symbol.id
-          for rhs in rules[symbol.id]:
-            result.incl findRec(rhs.pattern[0])
-
-    findRec(symbol)
-
-  let firstSets: seq[HashSet[MTerminal]] = collect:
-    for (i, info) in nonterminals.pairs:
-      findFirstSet(newNonTerminal(i))
-
-  # - build automaton: -
-
-  proc isRuleEnd(ruleIdDot: MRuleIdDotted): bool =
-    ruleIdDot.dotPos == len(rules[ruleIdDot.id].pattern)
-
-  var
-    #adjacencyMat: seq[seq[Option[MSymbol]]]
-    stateItems: seq[seq[MItem]]
-    stateLookup: Table[seq[MRuleIdDotted], int]
-
-  # returns state id
-  # items are just the initial ones with no closure
-  proc buildStateMashine(items: seq[MItem], adjacencyMat = newSeq[seq[Option[MSymbol]]]()): (int, seq[seq[Option[MSymbol]]]) =
-    var adjacencyMat = adjacencyMat
-
-    proc findTransitions(currentState: int, items: seq[MItem]) =
-      var
-        lookaheadTable: Table[MRuleIdDotted, MLookahead]
-        transitions: Table[MSymbol, seq[MRuleIdDotted]]  # the dotted rule is without the shift (because I need to lookup lookahead)
-
-      proc closure(ruleIdDot: MRuleIdDotted, lookahead: MLookahead) =
-        if ruleIdDot in lookaheadTable:
-          if lookahead <= lookaheadTable[ruleIdDot]: return
-          lookaheadTable[ruleIdDot].incl lookahead
+  let (actionTable, gotoTable, stateItems) = block:
+    let data = toJson((rules, nonterminals.mapIt(it.name), patternLineInfo))
+    let res = block:
+      let (output, code) = gorgeEx(/."private/parsergen/tablegen", input=data&"\n", cache=data)
+      if code == 0: output
+      else:
+        discard staticExec("nim c private/parsergen/tablegen.nim")
+        let (output, code) = gorgeEx(/."private/parsergen/tablegen", input=data&"\n", cache=data)
+        if code == 0: output
         else:
-          lookaheadTable[ruleIdDot] = lookahead
+          echo output
+          quit 1
 
-        assert not isRuleEnd(ruleIdDot)
-        let pattern = rules[ruleIdDot.id].pattern
-        let symbol = pattern[ruleIdDot.dotPos]
-        if symbol in transitions:
-          transitions[symbol] &= ruleIdDot
-        else:
-          transitions[symbol] = @[ruleIdDot]
-        if symbol.kind == mSymNonTerminal:
-          let nextLookahead =
-            if ruleIdDot.dotPos == high(pattern):
-              lookahead
-            else:
-              let nextSymbol = pattern[ruleIdDot.dotPos + 1]
-              case nextSymbol.kind
-              of mSymTerminal:    toHashSet([nextSymbol.name])
-              of mSymNonTerminal: firstSets[nextSymbol.id]
-          for i in 0 .. high(rules[symbol.id]):
-            closure(
-              (id: (symbol.id, i), dotPos: 0),
-              nextLookahead
-            )
-
-      for item in items:
-        if not isRuleEnd(item.ruleIdDot):
-          closure(item.ruleIdDot, item.lookahead)
-
-      for (symbol, rulesIdDot) in transitions.mpairs:
-        sort rulesIdDot
-        let newItems =
-          rulesIdDot.mapIt(MItem(
-            ruleIdDot: (id: it.id, dotPos: it.dotPos + 1),
-            lookahead: lookaheadTable[it]
-          ))
-        let (toState, newAdjacencyMat) = buildStateMashine(newItems, adjacencyMat)
-        adjacencyMat = newAdjacencyMat
-        adjacencyMat[currentState][toState] = some(symbol)
-
-    let rulesIdDot = items.mapIt(it.ruleIdDot)
-
-    # case: similar state exists (at most differs in lookahead)
-    if rulesIdDot in stateLookup:
-      let oldState = stateLookup[rulesIdDot]
-      var oldItems = stateItems[oldState]
-      assert len(oldItems) == len(items)
-
-      var newLookahead = false
-      for (i, item) in items.pairs:
-        if not(item.lookahead <= oldItems[i].lookahead):
-          newLookahead = true
-          # update lookahead:
-          stateItems[oldState][i].lookahead = oldItems[i].lookahead + item.lookahead
-
-      # if lookahead changed cascade update:
-      if newLookahead:
-        findTransitions(oldState, items)
-
-      (oldState, adjacencyMat)
-
-    # case: no similar state exists:
-    else:
-      # add state to matrix:
-      stateItems &= items
-      let currentState = high(stateItems)
-      stateLookup[rulesIdDot] = currentState
-      adjacencyMat &= newSeqWith(len(adjacencyMat), none(MSymbol))
-      for row in adjacencyMat.mitems:
-        row &= none(MSymbol)
-
-      # find transitions:
-      findTransitions(currentState, items)
-
-      (currentState, adjacencyMat)
-
-  let (_, adjacencyMat) = buildStateMashine(@[MItem(ruleIdDot: ((0, 0), 0), lookahead: toHashSet([""]))])
-
-  # - build parsing table: -
-
-  var
-    actionTable = newSeq[Table[MTerminal, Action]](len(stateItems))
-    gotoTable = newSeqWith(len(stateItems), newSeqWith(len(nonterminals), -1))  # (from state, nonterminal) -> target state
-
-  for (fromState, row) in adjacencyMat.pairs:
-    
-    proc ruleNimNode(ruleId: MRuleId): NimNode =
-      patternNimNode[rules[ruleId].patternId]
-
-    func lineInfoShort(node: NimNode): string =
-      let lineInfo = lineInfoObj(node)
-      "(" & $lineInfo.line & "," & $lineInfo.column & ")"
-
-    # reduces:
-    for item in stateItems[fromState]:
-      if isRuleEnd(item.ruleIdDot):
-        let ruleId = item.ruleIdDot.id
-
-        if ruleId == (0, 0):
-          actionTable[fromState][""] = Action(kind: actionAccept)
-
-        else:
-          let patternId = rules[item.ruleIdDot.id].patternId
-          let action = Action(kind: actionReduce, id: patternId)
-          for terminal in item.lookahead:
-            if terminal notin actionTable[fromState]:
-              actionTable[fromState][terminal] = action
-
-            # possible conflict:
-            else:
-              let curAction = actionTable[fromState][terminal]
-              # conflict:
-              if curAction.kind != actionReduce or curAction.id != action.id:
-                assert curAction.kind == actionAccept
-                error(
-                  "reduce/reduce conflict with " & lineInfoShort(patternNimNode[curAction.id]),
-                  patternNimNode[patternId]
-                )
-
-    for (toState, symbol) in row.pairs:
-      if Some(@symbol) ?= symbol:
-        case symbol.kind
-
-        # shift:
-        of mSymTerminal:
-          let action = Action(kind: actionShift, goto: toState)
-          if symbol.name notin actionTable[fromState]:
-            actionTable[fromState][symbol.name] = action
-
-          # possible conflict:
-          else:
-            let curAction = actionTable[fromState][symbol.name]
-            # conflict:
-            if curAction.kind != actionShift or curAction.goto != action.goto:
-              var shiftRuleNodes: seq[NimNode]
-              proc findShiftRules(state: int) =
-                for item in stateItems[state]:
-                  if not isRuleEnd(item.ruleIdDot):
-                    shiftRuleNodes &= ruleNimNode(item.ruleIdDot.id)
-              findShiftRules(toState)
-              case curAction.kind
-              of actionReduce:
-                error(
-                  "shift/reduce conflict with:" &
-                  "  shifts: " & shiftRuleNodes[1..^1].map(lineInfoShort).join(", ") &
-                  "  reduce: " & lineInfoShort(patternNimNode[curAction.id]),
-                  shiftRuleNodes[0]
-                )
-              of actionShift:
-                findShiftRules(curAction.goto)
-                error(
-                  "shift/shift conflict with: " &
-                  shiftRuleNodes[1..^1].map(lineInfoShort).join(", "),
-                  shiftRuleNodes[0]
-                )
-              else:
-                assert false
-
-        # goto:
-        of mSymNonTerminal:
-          assert gotoTable[fromState][symbol.id] < 0
-          gotoTable[fromState][symbol.id] = toState
+    res.fromJson((seq[Table[MTerminal, Action]], seq[seq[int]], seq[seq[MItem]]))
 
   # --- build code: ---
 
