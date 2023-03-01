@@ -146,7 +146,12 @@ test "test":
       (LPAR, mul, RPAR): s[1]
       NUM: Exp(kind: ekNum, val: s[0].val)
       IDENT: Exp(kind: ekVar, name: s[0].name)
-      
+  
+
+  for token in "a = (1+3) * 3; out a".tokens(lex):
+    echo token
+
+  echo "\n"
 
   check:
     $parse(

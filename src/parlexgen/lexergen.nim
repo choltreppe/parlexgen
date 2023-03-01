@@ -1,4 +1,5 @@
 import std/[macros, genasts, sequtils, strutils, options]
+import fusion/matching
 export options
 
 import ./private/utils, ./common
@@ -77,7 +78,7 @@ macro makeLexer*(head,body: untyped): untyped =
     # -- plain rules: --
     rulesSeqDef.add genAddRule(rule)
 
-  result = quote do:
+  quote do:
     proc `procIdent`(`code`: string, `state`: var LexerState): Option[`tokenType`] =
       while `state`.pos < len(`code`):
         let `oldPos` = `state`.pos
@@ -102,4 +103,8 @@ macro makeLexer*(head,body: untyped): untyped =
           raise LexingError(pos: `oldPos`, line: `line`, col: `col`, msg: "lexing failed")
       return none(`tokenType`)
 
-  #debugEcho result.repr
+
+iterator tokens*[T](code: string, lexer: LexerProc[T]): T =
+  var state = initLexerState()
+  while Some(@token) ?= lexer(code, state):
+    yield token
