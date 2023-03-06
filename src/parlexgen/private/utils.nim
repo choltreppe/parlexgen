@@ -45,5 +45,18 @@ proc forLoopParts*(node: NimNode): tuple[elems,idents: seq[NimNode], vals,body: 
       elem.expectKind(nnkIdent)
       result.idents &= elem
 
+
 template `/.`*(x: string): string =
   (when defined(posix): "./" & x else: x)
+
+
+proc execCompiled*(prog, data: string): string =
+  let (output, code) = gorgeEx(/.prog, input=data, cache=data)
+  if code == 0: output
+  else:
+    discard staticExec("nim c --cc:clang -f "&prog&".nim")
+    let (output, code) = gorgeEx(/.prog, input=data, cache=data)
+    if code == 0: output
+    else:
+      echo output
+      quit code

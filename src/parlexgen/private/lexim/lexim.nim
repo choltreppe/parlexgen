@@ -7,8 +7,10 @@
 #    distribution, for details about the copyright.
 #
 
-import
-  regexprs, nfa, macros, marshal
+import regexprs, nfa, macros, base64
+import unibs
+
+import ".."/utils
 
 proc findMacro(name: string): PRegExpr {.used.} = nil
 
@@ -91,9 +93,6 @@ proc genMatcher(a: DFA; s, i: NimNode; sections: seq[tuple[pattern: string, body
       ifStmt.add newTree(nnkElse, actions)
       caseStmt.add newTree(nnkOfBranch, newLit(src), ifStmt)
 
-template `/.`(x: string): string =
-  (when defined(posix): "./" & x else: x)
-
 proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: NimNode]]; doStepEnd: NimNode): NimNode =
   when false:
     var bigRe: PRegExpr = nil
@@ -120,28 +119,9 @@ proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: Nim
     for (pattern, body) in sections:
       res.add pattern
 
-    let data = $$res
+    let data = res.serialize.encode
 
-    let o = to[DFA]:
-      let (output, code) = gorgeEx(/."lexe", input=data&"\n", cache=data)
-      if code == 0: output
-      else:
-        discard staticExec("nim c lexe.nim")
-        staticExec(/."lexe", input=data&"\n", cache=data)
+    let o = execCompiled("lexim/lexe", data&"\n").decode.deserialize(DFA)
 
     result = genMatcher(o, s, pos, sections, doStepEnd)
   #echo repr result
-
-when isMainModule: # defined(testing):
-  var input = "the 0909 else input elif elseo end"
-  let asc = input.cstring
-  var pos = 0
-  while pos < input.len:
-    let oldPos = pos
-    match input, pos:
-    of r"\d+": echo "an integer ", input.substr(oldPos, pos-1), "##"
-    of "else": echo "an ELSE"
-    of "elif": echo "an ELIF"
-    of "end": echo "an END"
-    of r"[a-zA-Z_]\w+": echo "an identifier ", input.substr(oldPos, pos-1), "##"
-    of r".": echo "something else ", input.substr(oldPos, pos-1), "##"

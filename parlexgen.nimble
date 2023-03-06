@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.4"
+version       = "0.1.5"
 author        = "Joel Lienhard"
 description   = "parser/lexer generator (LALR)"
 license       = "MIT"
@@ -11,4 +11,4 @@ srcDir        = "src"
 
 requires "nim >= 1.6.6"
 requires "fusion >= 1.1"
-requires "jsony"
+requires "unibs >= 0.1.1"

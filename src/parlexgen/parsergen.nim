@@ -1,6 +1,6 @@
 import fusion/matching
-import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm]
-import jsony
+import std/[macros, genasts, sugar, sequtils, strutils, tables, sets, options, algorithm, base64]
+import unibs
 
 import ./private/utils, ./common
 import ./private/parsergen/types
@@ -128,19 +128,9 @@ macro makeParser*(head,body: untyped): untyped =
   # --- build parsing table: ---
 
   let (actionTable, gotoTable, stateItems) = block:
-    let data = toJson((rules, nonterminals.mapIt(it.name), patternLineInfo))
-    let res = block:
-      let (output, code) = gorgeEx(/."private/parsergen/tablegen", input=data&"\n", cache=data)
-      if code == 0: output
-      else:
-        discard staticExec("nim c private/parsergen/tablegen.nim")
-        let (output, code) = gorgeEx(/."private/parsergen/tablegen", input=data&"\n", cache=data)
-        if code == 0: output
-        else:
-          echo output
-          quit 1
-
-    res.fromJson((seq[Table[MTerminal, Action]], seq[seq[int]], seq[seq[MItem]]))
+    let data = (rules, nonterminals.mapIt(it.name), patternLineInfo).serialize.encode
+    let res = execCompiled("parsergen/tablegen", data&"\n")
+    res.decode.deserialize((seq[Table[MTerminal, Action]], seq[seq[int]], seq[seq[MItem]]))
 
   # --- build code: ---
 

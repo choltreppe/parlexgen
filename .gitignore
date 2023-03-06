@@ -1,2 +1,7 @@
-tests/test1
-src/parlexgen/private/lexim/lexe
+*
+!*/
+!*.*
+
+*.exe
+nimcache
+*.js

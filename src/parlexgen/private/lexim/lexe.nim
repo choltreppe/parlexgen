@@ -7,15 +7,15 @@
 #    distribution, for details about the copyright.
 #
 
-import
-  regexprs, nfa, marshal
+import regexprs, nfa, base64
+import unibs
 
 # The part that implements lexer generation as an exe to speed up
 # this process.
 proc findMacro(name: string): PRegExpr = nil
 
 proc main(input: string): string =
-  let inp = marshal.to[seq[string]](input)
+  let inp = input.decode.deserialize(seq[string])
 
   var bigRe: PRegExpr = nil
   for i in 0..<inp.len:
@@ -32,6 +32,6 @@ proc main(input: string): string =
   let alph = fullAlphabet(n)
   NFA_to_DFA(n, d, alph)
   optimizeDFA(d, o, alph)
-  result = $$o
+  result = o.serialize.encode
 
 echo main(readLine(stdin))

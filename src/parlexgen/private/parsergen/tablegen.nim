@@ -1,6 +1,6 @@
-import std/[strformat ,strutils, sequtils, sets, tables, options, sugar, algorithm, macros]
+import std/[strformat ,strutils, sequtils, sets, tables, options, sugar, algorithm, macros, base64]
 import fusion/matching
-import jsony
+import unibs
 
 import ./types
 
@@ -227,6 +227,6 @@ proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLi
 when isMainModule:
 
   let (rules, nonterminals, patternLineInfo) =
-    readLine(stdin).fromJson((seq[MRules], seq[string], seq[LineInfo]))
+    readLine(stdin).decode.deserialize((seq[MRules], seq[string], seq[LineInfo]))
 
-  echo buildParsingTable(rules, nonterminals, patternLineInfo).toJson
+  echo buildParsingTable(rules, nonterminals, patternLineInfo).serialize.encode
