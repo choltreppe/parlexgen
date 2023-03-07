@@ -3,9 +3,7 @@ With focus on easy to use custom error handling.<br>
 
 The lexer is build on top of [lexim](https://github.com/Araq/lexim)
 
-### js backend
-
-parlexgen works with js backend, but if you are on a posix system you need to pass `-d:posix` to the compiler.
+supports `js` backend
 
 ## Usage
 

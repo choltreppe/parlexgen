@@ -1,4 +1,4 @@
-import std/[macros, tables] 
+import std/[macros, tables, os] 
 
 proc assertError*(cond: bool, msg: string, node: NimNode) =
   if not cond:
@@ -47,7 +47,9 @@ proc forLoopParts*(node: NimNode): tuple[elems,idents: seq[NimNode], vals,body: 
 
 
 template `/.`*(x: string): string =
-  (when defined(posix): "./" & x else: x)
+  when getCurrentCompilerExe()[0] == '/':
+    "./" & x
+  else: x
 
 
 proc execCompiled*(prog, data: string): string =
