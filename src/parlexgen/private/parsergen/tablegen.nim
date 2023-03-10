@@ -58,7 +58,8 @@ proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLi
         let pattern = rules[ruleIdDot.id].pattern
         let symbol = pattern[ruleIdDot.dotPos]
         if symbol in transitions:
-          transitions[symbol] &= ruleIdDot
+          if ruleIdDot notin transitions[symbol]:
+            transitions[symbol] &= ruleIdDot
         else:
           transitions[symbol] = @[ruleIdDot]
         if symbol.kind == mSymNonTerminal:
@@ -149,6 +150,26 @@ proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLi
       echo fmt"{lineInfo} {msg}"
       gotError = true
 
+    for (toState, symbol) in row.pairs:
+      if Some(@symbol) ?= symbol:
+        case symbol.kind
+
+        # shift:
+        of mSymTerminal:
+          let action = Action(kind: actionShift, goto: toState)
+          if symbol.name notin actionTable[fromState]:
+            actionTable[fromState][symbol.name] = action
+
+          # possible conflict:
+          else:
+            let curAction = actionTable[fromState][symbol.name]
+            assert curAction.kind == actionShift and curAction.goto == action.goto
+
+        # goto:
+        of mSymNonTerminal:
+          assert gotoTable[fromState][symbol.id] < 0
+          gotoTable[fromState][symbol.id] = toState
+
     # reduces:
     for item in stateItems[fromState]:
       if isRuleEnd(item.ruleIdDot):
@@ -169,55 +190,16 @@ proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLi
               let curAction = actionTable[fromState][terminal]
               # conflict:
               if curAction.kind != actionReduce or curAction.id != action.id:
-                assert curAction.kind == actionAccept
-                echoError(
-                  "reduce/reduce conflict with " & lineInfoShort(patternLineInfo[curAction.id]),
+                echoError((
+                    case curAction.kind
+                    of actionShift: "shift/reduce conflict"
+                    of actionReduce: "reduce/reduce conflict with " & lineInfoShort(patternLineInfo[curAction.id])
+                    else:
+                      assert false
+                      return
+                  ),
                   patternLineInfo[patternId]
                 )
-
-    for (toState, symbol) in row.pairs:
-      if Some(@symbol) ?= symbol:
-        case symbol.kind
-
-        # shift:
-        of mSymTerminal:
-          let action = Action(kind: actionShift, goto: toState)
-          if symbol.name notin actionTable[fromState]:
-            actionTable[fromState][symbol.name] = action
-
-          # possible conflict:
-          else:
-            let curAction = actionTable[fromState][symbol.name]
-            # conflict:
-            if curAction.kind != actionShift or curAction.goto != action.goto:
-              var shiftRuleLines: seq[LineInfo]
-              proc findShiftRules(state: int) =
-                for item in stateItems[state]:
-                  if not isRuleEnd(item.ruleIdDot):
-                    shiftRuleLines &= ruleLineInfo(item.ruleIdDot.id)
-              findShiftRules(toState)
-              case curAction.kind
-              of actionReduce:
-                echoError(
-                  "shift/reduce conflict with:" &
-                  "  shifts: " & shiftRuleLines[1..^1].map(lineInfoShort).join(", ") &
-                  "  reduce: " & lineInfoShort(patternLineInfo[curAction.id]),
-                  shiftRuleLines[0]
-                )
-              of actionShift:
-                findShiftRules(curAction.goto)
-                echoError(
-                  "shift/shift conflict with: " &
-                  shiftRuleLines[1..^1].map(lineInfoShort).join(", "),
-                  shiftRuleLines[0]
-                )
-              else:
-                assert false
-
-        # goto:
-        of mSymNonTerminal:
-          assert gotoTable[fromState][symbol.id] < 0
-          gotoTable[fromState][symbol.id] = toState
 
   if gotError: quit 1
 

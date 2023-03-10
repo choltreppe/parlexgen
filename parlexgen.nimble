@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.6"
+version       = "0.1.7"
 author        = "Joel Lienhard"
 description   = "parser/lexer generator (LALR)"
 license       = "MIT"

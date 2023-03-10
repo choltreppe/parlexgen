@@ -53,11 +53,11 @@ template `/.`*(x: string): string =
 
 
 proc execCompiled*(prog, data: string): string =
-  let (output, code) = gorgeEx(/.prog, input=data, cache=data)
+  let (output, code) = gorgeEx(/.prog, input=data)
   if code == 0: output
   else:
-    discard staticExec("nim c --cc:clang -f "&prog&".nim")
-    let (output, code) = gorgeEx(/.prog, input=data, cache=data)
+    discard staticExec("nim c "&prog&".nim")
+    let (output, code) = gorgeEx(/.prog, input=data)
     if code == 0: output
     else:
       echo output
