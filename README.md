@@ -1,3 +1,7 @@
+**Important**: version 0.2.0 introduces a new `ParsingError` type that is generic (more information below) which will break some code but should be a easy fix
+
+# ParLexGen
+
 This module provides a macro for generating lexers and parsers (LALR(1))<br>
 With focus on easy to use custom error handling.<br>
 
