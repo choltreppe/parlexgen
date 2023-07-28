@@ -6,7 +6,10 @@ import ./private/utils, ./common
 import ./private/parsergen/types
 
 
-type ParsingError* = ref object of CatchableError
+type ParsingError*[T: object, K: enum] = ref object of CatchableError
+  token*: Option[T]
+  expectedTerminals*: set[K]
+  expectedEOF*: bool
 
 
 macro makeParser*(head,body: untyped): untyped =
@@ -334,6 +337,15 @@ macro makeParser*(head,body: untyped): untyped =
 
           stateErrorData : array[`stateNum`, seq[tuple[id,pos: int]]] = `stateErrorDataDef`
 
+        let possibleTokens = block:  # cant make that const (no idea why)
+            var res: array[`stateNum`, tuple[terminals: set[`tokenKindType`], eof: bool]]
+            for state, actions in `action`:
+              for terminal, action in actions.terminals:
+                if action.kind != actionNone:
+                  res[state].terminals.incl terminal
+              res[state].eof = actions.eof.kind != actionNone
+            res
+
         var
           `stack`: seq[tuple[s: `symbolType`, state: int]]
           `curState` = 0
@@ -373,5 +385,10 @@ macro makeParser*(head,body: untyped): untyped =
             {.warning[UnreachableCode]:off.}
             for (`errorId`, `errorDotPos`) in stateErrorData[`curState`]:
               `errorHandlingCaseStmt`
-            raise ParsingError(msg: "parsing failed")
+            raise ParsingError[`tokenType`, `tokenKindType`](
+              msg: "parsing failed",
+              token: token,
+              expectedTerminals: possibleTokens[`curState`].terminals,
+              expectedEOF: possibleTokens[`curState`].eof
+            )
             {.warning[UnreachableCode]:on.}

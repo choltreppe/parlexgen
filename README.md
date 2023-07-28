@@ -78,7 +78,7 @@ makeParser parse[Token]:
     # After this block is executed, the function doesnt return automatically.
     # This is because it could happen that multiple rules could be reduced next,
     # so all of those error handlers get called, if they exist.
-    # And afterwards a ParsingError is raised.
+    # And afterwards a ParsingError is raised (which contains some usefull information, details below).
     # But you can return yourself from inside the except block if you want
     try:
       (mul, ASTERIX, add): Exp(kind: ekOp, op: opMul, left: s[0], right: s[2])
@@ -117,9 +117,25 @@ echo parse(
 )
 ```
 
+### ParsingError
+often the raised `ParsingError` is enough for a good error message.<br>
+Its way simpler if you just want errors like:<br>
+`found ... but expected one of: .....` or alike
+
+```nim
+# T := token type
+# K := token kind type (type of .kind field of token type)
+
+type ParsingError*[T: object, K: enum] = ref object of CatchableError
+  token*: Option[T]            # the token that caused the error
+  expectedTerminals*: set[K]   # the possible token kinds that wouldn't have caused an error
+  expectedEOF*: bool           # true if there would have been a rule for $
+```
 
 ## Contribution
 PRs and issues are very welcome
 
 ## TODO
-- improve lexer ?
+- improve readme page
+- support epsilon (empty rhs)
+- improve lexer (own lexer) ?
