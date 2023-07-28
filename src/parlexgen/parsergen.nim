@@ -318,6 +318,17 @@ macro makeParser*(head,body: untyped): untyped =
 
       caseStmt
 
+    let possibleTokensDef = block:
+      var res = nnkBracket.newTree()
+      for state, actions in actionTable:
+        var terminals = nnkCurly.newTree()
+        var eof = false
+        for t, action in actions:
+          if action.kind != actionNone:
+            if t == "": eof = true
+            else: terminals.add ident(t)
+        res.add nnkTupleConstr.newTree(terminals, newLit(eof))
+      res
 
     let
       resTypeField = ident(nonterminalVariantPrefix & $0)
@@ -337,14 +348,7 @@ macro makeParser*(head,body: untyped): untyped =
 
           stateErrorData : array[`stateNum`, seq[tuple[id,pos: int]]] = `stateErrorDataDef`
 
-        let possibleTokens = block:  # cant make that const (no idea why)
-            var res: array[`stateNum`, tuple[terminals: set[`tokenKindType`], eof: bool]]
-            for state, actions in `action`:
-              for terminal, action in actions.terminals:
-                if action.kind != actionNone:
-                  res[state].terminals.incl terminal
-              res[state].eof = actions.eof.kind != actionNone
-            res
+          possibleTokens: array[`stateNum`, tuple[terminals: set[`tokenKindType`], eof: bool]] = `possibleTokensDef`
 
         var
           `stack`: seq[tuple[s: `symbolType`, state: int]]
