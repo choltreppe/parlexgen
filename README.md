@@ -1,4 +1,4 @@
-**Important**: version 0.2.0 introduces a new `ParsingError` type that is generic (more information below) which will break some code but should be a easy fix
+**Note**: version 0.2.0 introduces a new `ParsingError` type that is generic (more information below) which will break some code but should be a easy fix
 
 # ParLexGen
 
