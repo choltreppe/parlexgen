@@ -9,6 +9,7 @@ import ./private/lexim/lexim
 type
   LexingError* = ref object of CatchableError
     pos*, line*, col*: int
+    runeCol*: int  # unicode position of col
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
@@ -16,13 +17,14 @@ macro makeLexer*(head,body: untyped): untyped =
   let (procIdent, tokenType) = getProcMeta(head)
 
   let
-    code   = genSym(nskParam, "code")
-    state  = genSym(nskParam, "state")
-    oldPos = ident"pos"
-    line   = ident"line"
-    col    = ident"col"
-    match  = ident"match"
-    rules  = genSym(nskVar, "rules")
+    code    = genSym(nskParam, "code")
+    state   = genSym(nskParam, "state")
+    oldPos  = ident"pos"
+    line    = ident"line"
+    col     = ident"col"
+    runeCol = ident"runeCol"
+    match   = ident"match"
+    rules   = genSym(nskVar, "rules")
     matchingBlock = genSym(nskLabel, "matching")
 
   proc genAddRule(rule: NimNode, captures: seq[NimNode] = @[]): NimNode =
@@ -81,9 +83,10 @@ macro makeLexer*(head,body: untyped): untyped =
   quote do:
     proc `procIdent`(`code`: string, `state`: var LexerState): Option[`tokenType`] =
       while `state`.pos < len(`code`):
-        let `oldPos` = `state`.pos
-        let `line`   = `state`.line
-        let `col`    = `state`.col
+        let `oldPos`  = `state`.pos
+        let `line`    = `state`.line
+        let `col`     = `state`.col
+        let `runeCol` = `state`.runeCol
         block `matchingBlock`:
           macro impl(c, pos, doEnd: untyped) =
             `rulesSeqDef`
@@ -91,14 +94,28 @@ macro makeLexer*(head,body: untyped): untyped =
 
           impl(`code`, `state`.pos):
             if `state`.pos < len(`code`):
-              case `code`[`state`.pos]:
+              let c = `code`[`state`.pos]
+              case c:
               of '\n':
                 inc `state`.line
                 `state`.col = 0
+                `state`.runeCol = 0
               of '\r':
                 `state`.col = 0
+                `state`.runeCol = 0
               else:
                 inc `state`.col
+                if `state`.runeOffset == 0:
+                  inc `state`.runeCol
+                  `state`.runeOffset =
+                    if uint(c) <= 127: 1
+                    elif uint(c) shr 5 == 0b110: 2
+                    elif uint(c) shr 4 == 0b1110: 3
+                    elif uint(c) shr 3 == 0b11110: 4
+                    elif uint(c) shr 2 == 0b111110: 5
+                    elif uint(c) shr 1 == 0b1111110: 6
+                    else: 1
+                dec `state`.runeOffset
 
           raise LexingError(pos: `oldPos`, line: `line`, col: `col`, msg: "lexing failed")
       return none(`tokenType`)
