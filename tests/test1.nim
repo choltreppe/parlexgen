@@ -103,7 +103,7 @@ test "test":
 
     stmnt[Stmnt]:
       (IDENT, ASSIGN, mul): Stmnt(kind: stmntAssign, res: s[0].name, exp: s[2])
-      
+
       (OUT, IDENT):
         debugEcho "found out statement"
         Stmnt(kind: stmntOutput, outVar: s[1].name)
@@ -130,7 +130,7 @@ test "test":
           of 0, 2: "expected number or math expression"
           of 1:    "invalid math expression"
           of 3:    "unexpected " & $token & " after math expression"
-      
+
       add: s[0]
 
     add[Exp]:
@@ -146,7 +146,7 @@ test "test":
       (LPAR, mul, RPAR): s[1]
       NUM: Exp(kind: ekNum, val: s[0].val)
       IDENT: Exp(kind: ekVar, name: s[0].name)
-  
+
 
   for token in "a = (1+3) * 3; out a".tokens(lex):
     echo token

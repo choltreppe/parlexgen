@@ -85,7 +85,7 @@ proc genMatcher(a: DFA; s, i: NimNode; sections: seq[tuple[pattern: string, body
     let actions = if rule >= 1:
            sections[rule-1].body
          else:
-         
+
            newTree(nnkBreakStmt, newNimNode(nnkEmpty))
     if ifStmt.len == 0:
       caseStmt.add newTree(nnkOfBranch, newLit(src), actions)
@@ -121,7 +121,7 @@ proc leximMatch*(s, pos: NimNode; sections: seq[tuple[pattern: string, body: Nim
 
     let data = res.serialize.encode
 
-    let o = execCompiled("lexim/lexe", data&"\n").decode.deserialize(DFA)
+    let o = execCompiled("lexe", data&"\n").decode.deserialize(DFA)
 
     result = genMatcher(o, s, pos, sections, doStepEnd)
   #echo repr result

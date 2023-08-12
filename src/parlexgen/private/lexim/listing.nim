@@ -97,4 +97,3 @@ proc charSetOrCharStr*(cc: set[char]): string =
     result = charStr(c1, {'.'}) # was: singleQuoteStr(c1)
   else:
     result = "[]"
-

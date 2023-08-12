@@ -13,7 +13,7 @@ type
 
 macro makeLexer*(head,body: untyped): untyped =
   body.expectKindError(nnkStmtList, "expected list of rules")
-  
+
   let (procIdent, tokenType) = getProcMeta(head)
 
   let
