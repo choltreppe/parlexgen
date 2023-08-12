@@ -52,12 +52,6 @@ proc forLoopParts*(node: NimNode): tuple[elems,idents: seq[NimNode], vals,body: 
       result.idents &= elem
 
 
-template `/.`*(x: string): string =
-  when getCurrentCompilerExe()[0] == '/':
-    "./" & x
-  else: x
-
-
 proc execCompiled*(prog, data: string): string =
   let (output, code) = gorgeEx(cmdPrefix & prog, input=data)
   if code == 0: output
