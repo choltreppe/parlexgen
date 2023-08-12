@@ -54,7 +54,7 @@ func `==`*(a, b: MSymbol): bool =
   if a.kind == b.kind:
     case a.kind
     of mSymTerminal:    a.name == b.name
-    of mSymNonTerminal: a.id   == b.id  
+    of mSymNonTerminal: a.id   == b.id
   else: false
 
 func newTerminal*(name: string): MSymbol = MSymbol(kind: mSymTerminal,    name: name)

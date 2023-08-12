@@ -70,7 +70,7 @@ macro makeParser*(head,body: untyped): untyped =
   var nextPatternId = 0
   for (i, def) in body.pairs:
     def[1].expectKind(nnkStmtList)
-    
+
     rules &= @[]
     for rhsDef in def[1]:
 
@@ -111,7 +111,7 @@ macro makeParser*(head,body: untyped): untyped =
           patternIds &= nextPatternId
           rules[^1] &= parseRhs(rhsDef[0])
         else:
-          for node in rhsDef[0]: 
+          for node in rhsDef[0]:
             patternIds &= nextPatternId
             rules[^1] &= parseRhs(node)
 
@@ -132,7 +132,7 @@ macro makeParser*(head,body: untyped): untyped =
 
   let (actionTable, gotoTable, stateItems) = block:
     let data = (rules, nonterminals.mapIt(it.name), patternLineInfo).serialize.encode
-    let res = execCompiled("parsergen/tablegen", data&"\n")
+    let res = execCompiled("tablegen", data&"\n")
     res.decode.deserialize((seq[Table[MTerminal, Action]], seq[seq[int]], seq[seq[MItem]]))
 
   # --- build code: ---
@@ -153,7 +153,7 @@ macro makeParser*(head,body: untyped): untyped =
       tokenForError = ident"token"
       errorDotPos   = genSym(nskForVar, "pos")
       errorDotPosRanged = ident"pos"
-      
+
       kindField = ident"kind"  # just too workaround a quote bug
 
     let nonterminalTypeDef = block:

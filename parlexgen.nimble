@@ -5,6 +5,9 @@ author        = "Joel Lienhard"
 description   = "parser/lexer generator (LALR)"
 license       = "MIT"
 srcDir        = "src"
+installExt = @["nim"]
+bin = @["parlexgen/private/lexim/lexe",
+        "parlexgen/private/parsergen/tablegen"]
 
 
 # Dependencies

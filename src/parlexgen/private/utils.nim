@@ -1,4 +1,10 @@
-import std/[macros, tables, os] 
+import std/[macros, tables, os]
+
+when not declared(buildOS):
+  const buildOS {.magic: "BuildOS".}: string = ""
+
+const cmdPrefix = when buildOS == "windows": "cmd /C "
+                  else: ""
 
 proc assertError*(cond: bool, msg: string, node: NimNode) =
   if not cond:
@@ -53,12 +59,8 @@ template `/.`*(x: string): string =
 
 
 proc execCompiled*(prog, data: string): string =
-  let (output, code) = gorgeEx(/.prog, input=data)
+  let (output, code) = gorgeEx(cmdPrefix & prog, input=data)
   if code == 0: output
   else:
-    discard staticExec("nim c "&prog&".nim")
-    let (output, code) = gorgeEx(/.prog, input=data)
-    if code == 0: output
-    else:
-      echo output
-      quit code
+    echo output
+    quit code

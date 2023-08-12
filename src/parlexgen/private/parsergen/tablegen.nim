@@ -7,7 +7,7 @@ import ./types
 
 proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLineInfo: seq[LineInfo]):
   tuple[action: seq[Table[MTerminal, Action]], goto: seq[seq[int]], items: seq[seq[MItem]]] =
-  
+
   func findFirstSet(symbol: MSymbol): HashSet[MTerminal] =
     let rules = rules
     var visited: HashSet[int]
@@ -139,7 +139,7 @@ proc buildParsingTable*(rules: seq[MRules], nonterminals: seq[string], patternLi
   var gotError = false
 
   for (fromState, row) in adjacencyMat.pairs:
-    
+
     proc ruleLineInfo(ruleId: MRuleId): LineInfo =
       patternLineInfo[rules[ruleId].patternId]
 
