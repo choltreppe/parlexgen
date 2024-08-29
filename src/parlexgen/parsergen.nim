@@ -146,15 +146,11 @@ macro makeParser*(head,body: untyped): untyped =
       goto         = genSym(nskConst, "goto" )
       stack        = genSym(nskVar, "stack")
       curState     = genSym(nskVar, "state")
-      curToken     = genSym(nskLet, "token")
-      curTokenKind = genSym(nskLet, "tokenKind")
       nextPatternId  = genSym(nskLet, "patternId")
       errorId      = genSym(nskForVar, "id")
       tokenForError = ident"token"
       errorDotPos   = genSym(nskForVar, "pos")
       errorDotPosRanged = ident"pos"
-
-      kindField = ident"kind"  # just too workaround a quote bug
 
     let nonterminalTypeDef = block:
       var variants =
@@ -294,29 +290,30 @@ macro makeParser*(head,body: untyped): untyped =
           genAst(data): data
       lookup
 
-    let errorHandlingCaseStmt = block:
-      var caseStmt = nnkCaseStmt.newTree(errorId)
-      for (body, patternIds) in errorHandlers:
-        if len(patternIds) == 1:
-          let l = patternLens[patternIds[0]]
-          caseStmt.add nnkOfBranch.newTree(
-            newLit(patternIds[0]),
-            quote do:
-              let `errorDotPosRanged` = range[0 .. `l`](`errorDotPos`)
-              `body`
-          )
-        else:
-          var branch = nnkOfBranch.newTree()
-          for id in patternIds:
-            branch.add newLit(id)
-          branch.add body
-          caseStmt.add branch
-
-      caseStmt.add nnkElse.newTree(
-        quote do: discard
-      )
-
-      caseStmt
+    let errorHandlingCaseStmt =
+      if len(errorHandlers) == 0:
+        newEmptyNode()
+      else:
+        var caseStmt = nnkCaseStmt.newTree(errorId)
+        for (body, patternIds) in errorHandlers:
+          if len(patternIds) == 1:
+            let l = patternLens[patternIds[0]]
+            caseStmt.add nnkOfBranch.newTree(
+              newLit(patternIds[0]),
+              quote do:
+                let `errorDotPosRanged` = range[0 .. `l`](`errorDotPos`)
+                `body`
+            )
+          else:
+            var branch = nnkOfBranch.newTree()
+            for id in patternIds:
+              branch.add newLit(id)
+            branch.add body
+            caseStmt.add branch
+        caseStmt.add nnkElse.newTree(
+          quote do: discard
+        )
+        caseStmt
 
     let possibleTokensDef = block:
       var res = nnkBracket.newTree()
